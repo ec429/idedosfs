@@ -213,6 +213,64 @@ static int plus3_create(const char *path, mode_t mode, struct fuse_file_info *fi
 	return(-EEXIST);
 }
 
+static int plus3_unlink(const char *path)
+{
+	if(strcmp(path, "/")==0)
+	{
+		return(-EISDIR);
+	}
+	if(path[0]!='/') return(-ENOENT);
+	int32_t i=lookup(path);
+	if((i<0)||(i>=(int32_t)d_ndirent))
+		return(-ENOENT);
+	path++;
+	char nm[9], ex[4];
+	size_t ne,nl,ee=0;
+	for(ne=0;ne<8;ne++)
+	{
+		if(path[ne]=='.') break;
+		if(!path[ne]) break;
+		nm[ne]=path[ne];
+	}
+	nl=ne;
+	for(;ne<8;ne++)
+		nm[ne]=' ';
+	nm[8]=0;
+	if(path[nl])
+	{
+		if(path[nl++]!='.') return(-1);
+		for(;ee<3;ee++)
+		{
+			if(!path[nl+ee]) break;
+			ex[ee]=path[nl+ee];
+		}
+	}
+	for(;ee<3;ee++)
+		ex[ee]=' ';
+	ex[3]=0;
+	pthread_rwlock_wrlock(&dmex);
+	for(uint32_t i=0;i<d_ndirent;i++)
+	{
+		if(d_list[i].status<16)
+		{
+			if(!memcmp(nm, d_list[i].name, 8))
+				if(!memcmp(ex, d_list[i].ext, 3))
+				{
+					for(unsigned int b=0;b<(d_manyblocks?8:16);b++)
+					{
+						if(d_list[i].al[b])
+							d_bitmap[d_list[i].al[b]]=false;
+						d_list[i].al[b]=0;
+					}
+					d_list[i].status=0xe5;
+					d_encode(dm+i*0x20, d_list[i]);
+				}
+		}
+	}
+	pthread_rwlock_unlock(&dmex);
+	return(0);
+}
+
 static int plus3_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
 {
 	int32_t i=fi->fh;
@@ -431,6 +489,7 @@ static int plus3_truncate(const char *path, off_t offset)
 				d_bitmap[d_list[i].al[b]]=false;
 			d_list[i].al[b]=0;
 		}
+		d_encode(dm+i*0x20, d_list[i]);
 		for(uint32_t i=0;i<d_ndirent;i++)
 		{
 			if((d_list[i].status<16)&&(d_list[i].xnum))
@@ -445,9 +504,9 @@ static int plus3_truncate(const char *path, off_t offset)
 							d_list[i].al[b]=0;
 						}
 						d_list[i].status=0xe5;
+						d_encode(dm+i*0x20, d_list[i]);
 					}
 			}
-			d_encode(dm+i*0x20, d_list[i]);
 		}
 		pthread_rwlock_unlock(&dmex);
 		return(0);
@@ -484,6 +543,7 @@ static int plus3_truncate(const char *path, off_t offset)
 					d_bitmap[d_list[i].al[b]]=false;
 				d_list[i].al[b]=0;
 			}
+			d_encode(dm+i*0x20, d_list[i]);
 		}
 	}
 	for(uint32_t i=0;i<d_ndirent;i++)
@@ -500,9 +560,9 @@ static int plus3_truncate(const char *path, off_t offset)
 						d_list[i].al[b]=0;
 					}
 					d_list[i].status=0xe5;
+					d_encode(dm+i*0x20, d_list[i]);
 				}
 		}
-		d_encode(dm+i*0x20, d_list[i]);
 	}
 	
 	pthread_rwlock_unlock(&dmex);
@@ -632,9 +692,9 @@ static struct fuse_operations plus3_oper = {
 	.readdir	= plus3_readdir,
 	/*.mknod		= plus3_mknod,
 	.mkdir		= plus3_mkdir,
-	.symlink	= plus3_symlink,
+	.symlink	= plus3_symlink,*/
 	.unlink		= plus3_unlink,
-	.rmdir		= plus3_rmdir,
+	/*.rmdir		= plus3_rmdir,
 	.rename		= plus3_rename,
 	.link		= plus3_link,
 	.chmod		= plus3_chmod,
