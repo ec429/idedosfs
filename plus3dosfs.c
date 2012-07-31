@@ -66,12 +66,15 @@ plus3_dirent *d_list=NULL;
 bool *d_bitmap=NULL; // disk block map, true if in use
 
 static void dread(char *buf, size_t bytes, off_t offset);
-plus3_dirent d_decode(const char buf[0x20]);
-int32_t lookup(const char *path);
-int32_t lookup_extent(const char *path, uint16_t extent);
+static void dwrite(char *src, size_t bytes, off_t offset);
+static plus3_dirent d_decode(const char buf[0x20]);
+static void d_encode(char buf[0x20], plus3_dirent src);
+static int32_t lookup(const char *path);
+static int32_t lookup_extent(const char *path, uint16_t extent);
 
 #define read16(p)	(((unsigned char *)p)[0]|(((unsigned char *)p)[1]<<8))
 #define read32(p)	(((unsigned char *)p)[0]|(((unsigned char *)p)[1]<<8)|(((unsigned char *)p)[2]<<16)|(((unsigned char *)p)[3]<<24))
+#define write32(p,v)	(((unsigned char *)p)[0]=v),(((unsigned char *)p)[1]=v>>8),(((unsigned char *)p)[2]=v>>16),(((unsigned char *)p)[3]=v>>24)
 
 static int plus3_getattr(const char *path, struct stat *st)
 {
@@ -101,6 +104,8 @@ static int plus3_getattr(const char *path, struct stat *st)
 		if(ck==(uint8_t)dm[where+127])
 			st->st_size=size-128; // first 128 bytes are the header itself
 	}
+	/*else
+		fprintf(stderr, "plus3dosfs: NOHEADER\n");*/
 	st->st_nlink=1;
 	pthread_rwlock_unlock(&dmex);
 	return(0);
@@ -160,7 +165,6 @@ static int plus3_read(const char *path, char *buf, size_t size, off_t offset, st
 	pthread_rwlock_rdlock(&dmex);
 	// grovel for the header
 	off_t where=d_offset+(((off_t)d_list[i].al[0])<<(7+d_bsh));
-	bool header=false;
 	if(memcmp(dm+where, "PLUS3DOS\032", 9)==0)
 	{
 		uint32_t size=read32(dm+where+11);
@@ -168,30 +172,37 @@ static int plus3_read(const char *path, char *buf, size_t size, off_t offset, st
 		for(size_t i=0;i<127;i++)
 			ck+=dm[where+i];
 		if(ck==(uint8_t)dm[where+127])
-			header=true;
+			offset+=128;
 	}
-	if(header) offset+=128;
 	uint32_t blocknum=offset>>(7+d_bsh), endblocknum=(offset+size-1)>>(7+d_bsh);
-	fprintf(stderr, "%u - %u\n", blocknum, endblocknum);
 	uint32_t transferred=0, len=1<<(7+d_bsh);
 	for(uint32_t b=blocknum;b<=endblocknum;b++)
 	{
 		if(b%(d_manyblocks?8:16))
 		{
 			if(i>=0)
-				where=d_offset+(((off_t)d_list[i].al[b%(d_manyblocks?8:16)])<<(7+d_bsh));
+			{
+				if(d_list[i].al[b%(d_manyblocks?8:16)])
+					where=d_offset+(((off_t)d_list[i].al[b%(d_manyblocks?8:16)])<<(7+d_bsh));
+				else
+					where=0;
+			}
 		}
 		else if(b)
 		{
 			uint16_t extent=b/(d_manyblocks?8:16);
 			i=lookup_extent(path, extent);
 			if(i>=0)
-				where=d_offset+(((off_t)d_list[i].al[0])<<(7+d_bsh));
+			{
+				if(d_list[i].al[0])
+					where=d_offset+(((off_t)d_list[i].al[0])<<(7+d_bsh));
+				else
+					where=0;
+			}
 		}
-		fprintf(stderr, "at %04x, b=%02x\n", (unsigned int)(offset+transferred), (unsigned int)b);
 		if(transferred+len>size)
 			len=size-transferred;
-		if(i>=0)
+		if((i>=0)&&where)
 			memcpy(buf+transferred, dm+where+(offset+transferred)%(1<<(7+d_bsh)), len);
 		else
 			memset(buf+transferred, 0, len);
@@ -200,6 +211,194 @@ static int plus3_read(const char *path, char *buf, size_t size, off_t offset, st
 	size=transferred;
 	pthread_rwlock_unlock(&dmex);
 	return(size);
+}
+
+static int plus3_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
+{
+	int32_t i=fi->fh;
+	if((i<0)||(i>=(int32_t)d_ndirent))
+		return(-ENOENT);
+	pthread_rwlock_wrlock(&dmex);
+	// grovel for the header
+	off_t where=d_offset+(((off_t)d_list[i].al[0])<<(7+d_bsh));
+	if(memcmp(dm+where, "PLUS3DOS\032", 9)==0)
+	{
+		uint32_t size=read32(dm+where+11);
+		uint8_t ck=0; // header checksum
+		for(size_t i=0;i<127;i++)
+			ck+=dm[where+i];
+		if(ck==(uint8_t)dm[where+127])
+			offset+=128;
+	}
+	uint32_t blocknum=offset>>(7+d_bsh), endblocknum=(offset+size-1)>>(7+d_bsh);
+	uint32_t transferred=0, len=1<<(7+d_bsh);
+	for(uint32_t b=blocknum;b<=endblocknum;b++)
+	{
+		if(b%(d_manyblocks?8:16))
+		{
+			if(i>=0)
+			{
+				if(d_list[i].al[b%(d_manyblocks?8:16)])
+					where=d_offset+(((off_t)d_list[i].al[b%(d_manyblocks?8:16)])<<(7+d_bsh));
+				else
+					where=0;
+			}
+		}
+		else if(b)
+		{
+			uint16_t extent=b/(d_manyblocks?8:16);
+			i=lookup_extent(path, extent);
+			if(i>=0)
+			{
+				if(d_list[i].al[0])
+					where=d_offset+(((off_t)d_list[i].al[0])<<(7+d_bsh));
+				else
+					where=0;
+			}
+		}
+		if(transferred+len>size)
+			len=size-transferred;
+		if((i>=0)&&where)
+			memcpy(dm+where+((offset+transferred)%(1<<(7+d_bsh))), buf+transferred, len);
+		transferred+=len;
+	}
+	size=transferred;
+	pthread_rwlock_unlock(&dmex);
+	return(size);
+}
+
+static int plus3_truncate(const char *path, off_t offset)
+{
+	return(0); // for now, just pretend
+	/* XXX Something appears to be wrong with this code, it's deheadering files and otherwise causing corruption XXX */
+	if(strcmp(path, "/")==0)
+	{
+		return(-EISDIR);
+	}
+	if(path[0]!='/') return(-ENOENT);
+	int32_t i=lookup(path);
+	if((i<0)||(i>=(int32_t)d_ndirent))
+		return(-ENOENT);
+	pthread_rwlock_wrlock(&dmex);
+	// grovel for the header
+	off_t where=d_offset+(((off_t)d_list[i].al[0])<<(7+d_bsh));
+	if(memcmp(dm+where, "PLUS3DOS\032", 9)==0)
+	{
+		uint32_t size=read32(dm+where+11);
+		uint8_t ck=0; // header checksum
+		for(size_t i=0;i<127;i++)
+			ck+=dm[where+i];
+		if(ck==(uint8_t)dm[where+127])
+		{
+			if(offset<size)
+				write32(dm+where+11, offset);
+			offset+=128;
+		}
+	}
+	else
+		fprintf(stderr, "NOHEADER\n");
+	// prepare path components
+	path++;
+	char nm[9], ex[4];
+	size_t ne,nl,ee=0;
+	for(ne=0;ne<8;ne++)
+	{
+		if(path[ne]=='.') break;
+		if(!path[ne]) break;
+		nm[ne]=path[ne];
+	}
+	nl=ne;
+	for(;ne<8;ne++)
+		nm[ne]=' ';
+	nm[8]=0;
+	if(path[nl])
+	{
+		if(path[nl++]!='.') return(-1);
+		for(;ee<3;ee++)
+		{
+			if(!path[nl+ee]) break;
+			ex[ee]=path[nl+ee];
+		}
+	}
+	for(;ee<3;ee++)
+		ex[ee]=' ';
+	ex[3]=0;
+	if(!offset)
+	{
+		for(unsigned int b=0;b<(d_manyblocks?8:16);b++)
+		{
+			if(d_list[i].al[b])
+				d_bitmap[d_list[i].al[b]]=false;
+			d_list[i].al[b]=0;
+		}
+		for(uint32_t i=0;i<d_ndirent;i++)
+		{
+			if((d_list[i].status<16)&&(d_list[i].xnum))
+			{
+				if(!memcmp(nm, d_list[i].name, 8))
+					if(!memcmp(ex, d_list[i].ext, 3))
+					{
+						for(unsigned int b=0;b<(d_manyblocks?8:16);b++)
+						{
+							if(d_list[i].al[b])
+								d_bitmap[d_list[i].al[b]]=false;
+							d_list[i].al[b]=0;
+						}
+						d_list[i].status=0xe5;
+					}
+			}
+			d_encode(dm+d_offset+i*0x20, d_list[i]);
+		}
+		pthread_rwlock_unlock(&dmex);
+		return(0);
+	}
+	uint32_t blocknum=(offset-1)>>(7+d_bsh);
+	for(uint32_t b=0;b<=blocknum;b++)
+	{
+		if(b%(d_manyblocks?8:16))
+		{
+			// nothing
+		}
+		else if(b)
+		{
+			uint16_t extent=b/(d_manyblocks?8:16);
+			i=lookup_extent(path, extent);
+		}
+	}
+	uint16_t extent=blocknum/(d_manyblocks?8:16);
+	fprintf(stderr, "extent %u\n", extent);
+	if(!((blocknum+1)%(d_manyblocks?8:16)))
+	{
+		d_list[i].rcount=((offset-1)>>7)%(1<<d_bsh);
+		d_list[i].bcount=(offset-1)&0x7F;
+		for(unsigned int b=(blocknum+1)%(d_manyblocks?8:16);b<(d_manyblocks?8:16);b++)
+		{
+			if(d_list[i].al[b])
+				d_bitmap[d_list[i].al[b]]=false;
+			d_list[i].al[b]=0;
+		}
+	}
+	for(uint32_t i=0;i<d_ndirent;i++)
+	{
+		if((d_list[i].status<16)&&(d_list[i].xnum>extent))
+		{
+			if(!memcmp(nm, d_list[i].name, 8))
+				if(!memcmp(ex, d_list[i].ext, 3))
+				{
+					for(unsigned int b=0;b<(d_manyblocks?8:16);b++)
+					{
+						if(d_list[i].al[b])
+							d_bitmap[d_list[i].al[b]]=false;
+						d_list[i].al[b]=0;
+					}
+					d_list[i].status=0xe5;
+				}
+		}
+		d_encode(dm+d_offset+i*0x20, d_list[i]);
+	}
+	
+	pthread_rwlock_unlock(&dmex);
+	return(0);
 }
 
 static int plus3_getxattr(const char *path, const char *name, char *value, size_t vlen)
@@ -331,13 +530,13 @@ static struct fuse_operations plus3_oper = {
 	.rename		= plus3_rename,
 	.link		= plus3_link,
 	.chmod		= plus3_chmod,
-	.chown		= plus3_chown,
+	.chown		= plus3_chown,*/
 	.truncate	= plus3_truncate,
-	.utimens	= plus3_utimens,*/
+	/*.utimens	= plus3_utimens,*/
 	.open		= plus3_open,
 	.read		= plus3_read,
-	/*.write		= plus3_write,
-	.statfs		= plus3_statfs,
+	.write		= plus3_write,
+	/*.statfs		= plus3_statfs,
 	.release	= plus3_release,
 	.fsync		= plus3_fsync,*/
 	/*.setxattr	= plus3_setxattr,*/
@@ -547,7 +746,7 @@ void dread(char *buf, size_t bytes, off_t offset)
 	uint8_t bcount; // count of bytes in last used record
 	uint16_t al[16]; // block pointers
 */
-plus3_dirent d_decode(const char buf[0x20])
+static plus3_dirent d_decode(const char buf[0x20])
 {
 	plus3_dirent rv;
 	rv.status=buf[0];
@@ -569,12 +768,36 @@ plus3_dirent d_decode(const char buf[0x20])
 	return(rv);
 }
 
-int32_t lookup(const char *path)
+static void d_encode(char buf[0x20], plus3_dirent src)
+{
+	buf[0]=src.status;
+	for(size_t i=0;i<8;i++)
+		buf[i+1]=src.name[i]&0x7f;
+	for(size_t i=0;i<3;i++)
+		buf[i+9]=src.ext[i]&0x7f;
+	if(src.ro) buf[9]|=0x80;
+	if(src.sys) buf[10]|=0x80;
+	if(src.ar) buf[11]|=0x80;
+	buf[12]=src.xnum&0x1f;
+	buf[14]=(src.xnum>>5)&0x3f;
+	buf[13]=src.bcount;
+	buf[15]=src.rcount;
+	if(d_manyblocks)
+		for(size_t i=0;i<8;i++)
+		{
+			buf[0x10+(i<<1)]=src.al[i]&0xff;
+			buf[0x11+(i<<1)]=(src.al[i]>>8)&0xff;
+		}
+	else
+		memcpy(buf+0x10, src.al, 0x10);
+}
+
+static int32_t lookup(const char *path)
 {
 	return(lookup_extent(path, 0));
 }
 
-int32_t lookup_extent(const char *path, uint16_t extent)
+static int32_t lookup_extent(const char *path, uint16_t extent)
 {
 	if(*path++!='/') return(-1);
 	char nm[9], ex[4];

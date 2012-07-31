@@ -27,5 +27,6 @@ Known Bugs:
 *	There's no mechanism for notifying users if the partition is changed - and flock() doesn't save you because there's more than one hardlink to each partition.  idedosfs needs to have its own flock() method that locks all the hardlinks to the partition.
 =plus3dosfs=
 *	The offset for the start of the data isn't being calculated (because I don't know how); it's just grovelling the partition until it finds some data.
-*	Writing isn't supported yet, nor file-creation, or indeed anything but readdir/getattr/open/read.
+*	File creation isn't supported yet, nor extending the length of an existing file
+*	truncate() is buggy in peculiar ways, so it's currently just pretending
 *	It is assumed (incorrectly) that the first extent of a file has extent number 0.  This can break with sparse files.

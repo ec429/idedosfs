@@ -222,7 +222,7 @@ static int ide_write(const char *path, const char *buf, size_t size, off_t offse
 	return(size);
 }
 
-static int ide_truncate(const char *path, off_t offset) 
+static int ide_truncate(const char *path, off_t offset)
 {
 	return(0); // do nothing, because you can't truncate partitions!
 }
