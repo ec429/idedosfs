@@ -73,6 +73,8 @@ static int32_t lookup_extent(const char *path, uint16_t extent);
 static uint16_t disk_alloc(void); // allocates a block.  Make sure you have wrlock before calling!
 static int32_t extent_alloc(plus3_dirent last, uint16_t extent); // allocates and populates a dirent.  Make sure you have wrlock before calling!
 
+static int plus3_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi);
+
 #define read16(p)	(((unsigned char *)p)[0]|(((unsigned char *)p)[1]<<8))
 #define read32(p)	(((unsigned char *)p)[0]|(((unsigned char *)p)[1]<<8)|(((unsigned char *)p)[2]<<16)|(((unsigned char *)p)[3]<<24))
 #define write32(p,v)	(((unsigned char *)p)[0]=((uint8_t)v)),(((unsigned char *)p)[1]=((uint8_t)v)>>8),(((unsigned char *)p)[2]=((uint8_t)v)>>16),(((unsigned char *)p)[3]=((uint8_t)v)>>24)
@@ -206,6 +208,14 @@ static int plus3_create(const char *path, mode_t mode, struct fuse_file_info *fi
 		if(i>=0)
 		{
 			fi->fh=i;
+			char hbuf[128];
+			memset(hbuf, 0, 128);
+			memcpy(hbuf, "PLUS3DOS\32\1\0\200\0\0\0\377", 16);
+			uint8_t ck=0; // header checksum
+			for(size_t i=0;i<127;i++)
+				ck+=hbuf[i];
+			hbuf[127]=ck;
+			plus3_write(path, hbuf, 128, 0, fi);
 			return(0);
 		}
 		return(-ENOSPC);
@@ -596,18 +606,18 @@ static int plus3_getxattr(const char *path, const char *name, char *value, size_
 	int rlen=0;
 	char result[256];
 	if(header&&(strcmp(name, "user.plus3dos.plus3basic.filetype")==0))
-		snprintf(result, 256, "%u%n", dm[where+15], &rlen);
+		snprintf(result, 256, "%u%n", (uint8_t)dm[where+15], &rlen);
 	else if(header&&(dm[where+15]==0)&&(strcmp(name, "user.plus3dos.plus3basic.line")==0))
-		snprintf(result, 256, "%u%n", read16(dm+where+18), &rlen);
+		snprintf(result, 256, "%u%n", (uint16_t)read16(dm+where+18), &rlen);
 	else if(header&&(dm[where+15]==0)&&(strcmp(name, "user.plus3dos.plus3basic.prog")==0))
-		snprintf(result, 256, "%u%n", read16(dm+where+20), &rlen); /* start of the variable area relative to the start of the program */
+		snprintf(result, 256, "%u%n", (uint16_t)read16(dm+where+20), &rlen); /* start of the variable area relative to the start of the program */
 	else if(header&&((dm[where+15]==1)||(dm[where+15]==2))&&(strcmp(name, "user.plus3dos.plus3basic.name")==0))
 	{
 		result[0]=dm[where+19];
 		rlen=1;
 	}
 	else if(header&&(dm[where+15]==3)&&(strcmp(name, "user.plus3dos.plus3basic.addr")==0))
-		snprintf(result, 256, "%u%n", read16(dm+where+18), &rlen);
+		snprintf(result, 256, "%u%n", (uint16_t)read16(dm+where+18), &rlen);
 	pthread_rwlock_unlock(&dmex);
 	if(!rlen) return(-ENOATTR);
 	if(vlen)
