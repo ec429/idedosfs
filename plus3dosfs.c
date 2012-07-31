@@ -70,10 +70,12 @@ static plus3_dirent d_decode(const char buf[0x20]);
 static void d_encode(char buf[0x20], plus3_dirent src);
 static int32_t lookup(const char *path);
 static int32_t lookup_extent(const char *path, uint16_t extent);
+static uint16_t disk_alloc(void); // allocates a block.  Make sure you have wrlock before calling!
+static int32_t extent_alloc(plus3_dirent last, uint16_t extent); // allocates and populates a dirent.  Make sure you have wrlock before calling!
 
 #define read16(p)	(((unsigned char *)p)[0]|(((unsigned char *)p)[1]<<8))
 #define read32(p)	(((unsigned char *)p)[0]|(((unsigned char *)p)[1]<<8)|(((unsigned char *)p)[2]<<16)|(((unsigned char *)p)[3]<<24))
-#define write32(p,v)	(((unsigned char *)p)[0]=v),(((unsigned char *)p)[1]=v>>8),(((unsigned char *)p)[2]=v>>16),(((unsigned char *)p)[3]=v>>24)
+#define write32(p,v)	(((unsigned char *)p)[0]=((uint8_t)v)),(((unsigned char *)p)[1]=((uint8_t)v)>>8),(((unsigned char *)p)[2]=((uint8_t)v)>>16),(((unsigned char *)p)[3]=((uint8_t)v)>>24)
 
 static int plus3_getattr(const char *path, struct stat *st)
 {
@@ -222,21 +224,31 @@ static int plus3_write(const char *path, const char *buf, size_t size, off_t off
 	off_t where=(((off_t)d_list[i].al[0])<<(7+d_bsh));
 	if(memcmp(dm+where, "PLUS3DOS\032", 9)==0)
 	{
-		uint32_t size=read32(dm+where+11);
+		uint32_t hsize=read32(dm+where+11);
 		uint8_t ck=0; // header checksum
 		for(size_t i=0;i<127;i++)
 			ck+=dm[where+i];
 		if(ck==(uint8_t)dm[where+127])
+		{
 			offset+=128;
+			if(offset+size>hsize)
+				write32(dm+where+11, offset+size);
+			ck=0;
+			for(size_t i=0;i<127;i++)
+				ck+=dm[where+i];
+			dm[where+127]=ck;
+		}
 	}
 	uint32_t blocknum=offset>>(7+d_bsh), endblocknum=(offset+size-1)>>(7+d_bsh);
 	uint32_t transferred=0, len=1<<(7+d_bsh);
 	for(uint32_t b=blocknum;b<=endblocknum;b++)
 	{
+		uint16_t extent=b/(d_manyblocks?8:16);
 		if(b%(d_manyblocks?8:16))
 		{
 			if(i>=0)
 			{
+				if(!d_list[i].al[b%(d_manyblocks?8:16)]) d_list[i].al[b%(d_manyblocks?8:16)]=disk_alloc();
 				if(d_list[i].al[b%(d_manyblocks?8:16)])
 					where=(((off_t)d_list[i].al[b%(d_manyblocks?8:16)])<<(7+d_bsh));
 				else
@@ -245,16 +257,21 @@ static int plus3_write(const char *path, const char *buf, size_t size, off_t off
 		}
 		else if(b)
 		{
-			uint16_t extent=b/(d_manyblocks?8:16);
+			plus3_dirent last=d_list[i];
 			i=lookup_extent(path, extent);
+			if(i<0)
+				i=extent_alloc(last, extent);
 			if(i>=0)
 			{
+				if(!d_list[i].al[0]) d_list[i].al[0]=disk_alloc();
 				if(d_list[i].al[0])
 					where=(((off_t)d_list[i].al[0])<<(7+d_bsh));
 				else
 					where=0;
 			}
 		}
+		if(i>=0)
+			d_encode(dm+i*0x20, d_list[i]);
 		if(transferred+len>size)
 			len=size-transferred;
 		if((i>=0)&&where)
@@ -268,8 +285,6 @@ static int plus3_write(const char *path, const char *buf, size_t size, off_t off
 
 static int plus3_truncate(const char *path, off_t offset)
 {
-	return(0); // for now, just pretend
-	/* XXX Something appears to be wrong with this code, it's deheadering files and otherwise causing corruption XXX */
 	if(strcmp(path, "/")==0)
 	{
 		return(-EISDIR);
@@ -289,9 +304,13 @@ static int plus3_truncate(const char *path, off_t offset)
 			ck+=dm[where+i];
 		if(ck==(uint8_t)dm[where+127])
 		{
+			offset+=128;
 			if(offset<size)
 				write32(dm+where+11, offset);
-			offset+=128;
+			ck=0;
+			for(size_t i=0;i<127;i++)
+				ck+=dm[where+i];
+			dm[where+127]=ck;
 		}
 	}
 	else
@@ -354,6 +373,11 @@ static int plus3_truncate(const char *path, off_t offset)
 	uint32_t blocknum=(offset-1)>>(7+d_bsh);
 	for(uint32_t b=0;b<=blocknum;b++)
 	{
+		if(i>=0)
+		{
+			d_list[i].rcount=(1<<d_bsh);
+			d_list[i].bcount=0;
+		}
 		if(b%(d_manyblocks?8:16))
 		{
 			// nothing
@@ -368,13 +392,16 @@ static int plus3_truncate(const char *path, off_t offset)
 	fprintf(stderr, "extent %u\n", extent);
 	if(!((blocknum+1)%(d_manyblocks?8:16)))
 	{
-		d_list[i].rcount=((offset-1)>>7)%(1<<d_bsh);
-		d_list[i].bcount=(offset-1)&0x7F;
-		for(unsigned int b=(blocknum+1)%(d_manyblocks?8:16);b<(d_manyblocks?8:16);b++)
+		if(i>=0)
 		{
-			if(d_list[i].al[b])
-				d_bitmap[d_list[i].al[b]]=false;
-			d_list[i].al[b]=0;
+			d_list[i].rcount=((offset-1)>>7)%(1<<d_bsh);
+			d_list[i].bcount=(offset-1)&0x7F;
+			for(unsigned int b=(blocknum+1)%(d_manyblocks?8:16);b<(d_manyblocks?8:16);b++)
+			{
+				if(d_list[i].al[b])
+					d_bitmap[d_list[i].al[b]]=false;
+				d_list[i].al[b]=0;
+			}
 		}
 	}
 	for(uint32_t i=0;i<d_ndirent;i++)
@@ -824,5 +851,35 @@ static int32_t lookup_extent(const char *path, uint16_t extent)
 		}
 	}
 	pthread_rwlock_unlock(&dmex);
+	return(-1);
+}
+
+uint16_t disk_alloc(void)
+{
+	for(uint32_t i=1;i<d_nblocks;i++)
+	{
+		if(!d_bitmap[i])
+		{
+			d_bitmap[i]=true;
+			return(i);
+		}
+	}
+	return(0);
+}
+
+static int32_t extent_alloc(plus3_dirent last, uint16_t extent)
+{
+	for(uint32_t i=0;i<d_ndirent;i++)
+	{
+		if(d_list[i].status==0xe5)
+		{
+			d_list[i]=last;
+			d_list[i].xnum=extent;
+			d_list[i].rcount=d_list[i].bcount=0;
+			memset(d_list[i].al, 0, 0x10);
+			d_encode(dm+i*0x20, d_list[i]);
+			return(i);
+		}
+	}
 	return(-1);
 }
