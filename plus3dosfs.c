@@ -60,7 +60,6 @@ off_t d_sz; // mmap region size
 uint32_t d_ndirent; // number of directory entries (DRM+1)
 uint32_t d_nblocks; // number of blocks (DSM+1)
 uint8_t d_bsh; // BSH (Block SHift)
-off_t d_offset; // offset of the start of the data
 bool d_manyblocks; // if true, there are only 8 block pointers in a dirent as each block pointer is 2 bytes
 plus3_dirent *d_list=NULL;
 bool *d_bitmap=NULL; // disk block map, true if in use
@@ -94,7 +93,7 @@ static int plus3_getattr(const char *path, struct stat *st)
 	st->st_mode=S_IFREG | (d_list[i].ro?0500:0700);
 	st->st_size=128*d_list[i].rcount+d_list[i].bcount;
 	// grovel for the header
-	off_t where=d_offset+(((off_t)d_list[i].al[0])<<(7+d_bsh));
+	off_t where=(((off_t)d_list[i].al[0])<<(7+d_bsh));
 	if(memcmp(dm+where, "PLUS3DOS\032", 9)==0)
 	{
 		uint32_t size=read32(dm+where+11);
@@ -164,7 +163,7 @@ static int plus3_read(const char *path, char *buf, size_t size, off_t offset, st
 		return(-ENOENT);
 	pthread_rwlock_rdlock(&dmex);
 	// grovel for the header
-	off_t where=d_offset+(((off_t)d_list[i].al[0])<<(7+d_bsh));
+	off_t where=(((off_t)d_list[i].al[0])<<(7+d_bsh));
 	if(memcmp(dm+where, "PLUS3DOS\032", 9)==0)
 	{
 		uint32_t size=read32(dm+where+11);
@@ -183,7 +182,7 @@ static int plus3_read(const char *path, char *buf, size_t size, off_t offset, st
 			if(i>=0)
 			{
 				if(d_list[i].al[b%(d_manyblocks?8:16)])
-					where=d_offset+(((off_t)d_list[i].al[b%(d_manyblocks?8:16)])<<(7+d_bsh));
+					where=(((off_t)d_list[i].al[b%(d_manyblocks?8:16)])<<(7+d_bsh));
 				else
 					where=0;
 			}
@@ -195,7 +194,7 @@ static int plus3_read(const char *path, char *buf, size_t size, off_t offset, st
 			if(i>=0)
 			{
 				if(d_list[i].al[0])
-					where=d_offset+(((off_t)d_list[i].al[0])<<(7+d_bsh));
+					where=(((off_t)d_list[i].al[0])<<(7+d_bsh));
 				else
 					where=0;
 			}
@@ -220,7 +219,7 @@ static int plus3_write(const char *path, const char *buf, size_t size, off_t off
 		return(-ENOENT);
 	pthread_rwlock_wrlock(&dmex);
 	// grovel for the header
-	off_t where=d_offset+(((off_t)d_list[i].al[0])<<(7+d_bsh));
+	off_t where=(((off_t)d_list[i].al[0])<<(7+d_bsh));
 	if(memcmp(dm+where, "PLUS3DOS\032", 9)==0)
 	{
 		uint32_t size=read32(dm+where+11);
@@ -239,7 +238,7 @@ static int plus3_write(const char *path, const char *buf, size_t size, off_t off
 			if(i>=0)
 			{
 				if(d_list[i].al[b%(d_manyblocks?8:16)])
-					where=d_offset+(((off_t)d_list[i].al[b%(d_manyblocks?8:16)])<<(7+d_bsh));
+					where=(((off_t)d_list[i].al[b%(d_manyblocks?8:16)])<<(7+d_bsh));
 				else
 					where=0;
 			}
@@ -251,7 +250,7 @@ static int plus3_write(const char *path, const char *buf, size_t size, off_t off
 			if(i>=0)
 			{
 				if(d_list[i].al[0])
-					where=d_offset+(((off_t)d_list[i].al[0])<<(7+d_bsh));
+					where=(((off_t)d_list[i].al[0])<<(7+d_bsh));
 				else
 					where=0;
 			}
@@ -281,7 +280,7 @@ static int plus3_truncate(const char *path, off_t offset)
 		return(-ENOENT);
 	pthread_rwlock_wrlock(&dmex);
 	// grovel for the header
-	off_t where=d_offset+(((off_t)d_list[i].al[0])<<(7+d_bsh));
+	off_t where=(((off_t)d_list[i].al[0])<<(7+d_bsh));
 	if(memcmp(dm+where, "PLUS3DOS\032", 9)==0)
 	{
 		uint32_t size=read32(dm+where+11);
@@ -347,7 +346,7 @@ static int plus3_truncate(const char *path, off_t offset)
 						d_list[i].status=0xe5;
 					}
 			}
-			d_encode(dm+d_offset+i*0x20, d_list[i]);
+			d_encode(dm+i*0x20, d_list[i]);
 		}
 		pthread_rwlock_unlock(&dmex);
 		return(0);
@@ -394,7 +393,7 @@ static int plus3_truncate(const char *path, off_t offset)
 					d_list[i].status=0xe5;
 				}
 		}
-		d_encode(dm+d_offset+i*0x20, d_list[i]);
+		d_encode(dm+i*0x20, d_list[i]);
 	}
 	
 	pthread_rwlock_unlock(&dmex);
@@ -410,7 +409,7 @@ static int plus3_getxattr(const char *path, const char *name, char *value, size_
 		return(-ENOENT);
 	pthread_rwlock_rdlock(&dmex);
 	// grovel for the header
-	off_t where=d_offset+(((off_t)d_list[i].al[0])<<(7+d_bsh));
+	off_t where=(((off_t)d_list[i].al[0])<<(7+d_bsh));
 	bool header=false;
 	size_t len=128*d_list[i].rcount+d_list[i].bcount;
 	if(memcmp(dm+where, "PLUS3DOS\032", 9)==0)
@@ -460,7 +459,7 @@ static int plus3_listxattr(const char *path, char *list, size_t size)
 		return(-ENOENT);
 	pthread_rwlock_rdlock(&dmex);
 	// grovel for the header
-	off_t where=d_offset+(((off_t)d_list[i].al[0])<<(7+d_bsh));
+	off_t where=(((off_t)d_list[i].al[0])<<(7+d_bsh));
 	bool header=false;
 	size_t len=128*d_list[i].rcount+d_list[i].bcount;
 	if(memcmp(dm+where, "PLUS3DOS\032", 9)==0)
@@ -679,24 +678,11 @@ int main(int argc, char *argv[])
 	for(size_t i=0;(i<<(7+d_bsh))<0x20*d_ndirent;i++) // mark the dirents' blocks as used
 		d_bitmap[i]=true;
 	
-	d_offset=0;
-	/* Magic d_offset autodetection, because I can't work out which eXDPB params control it */
-	/* We just keep looking until we get a valid dirent */
-	while(!dm[d_offset+1])
-	{
-		d_offset+=0x20;
-		if(d_offset+1>d_sz)
-		{
-			fprintf(stderr, "plus3dosfs: Failed to grovelise d_offset\n");
-			goto shutdown;
-		}
-	}
-	fprintf(stderr, "plus3dosfs: grovelled d_offset = %04x\n", (unsigned int)d_offset);
 	size_t uents=0;
 	for(size_t i=0;i<d_ndirent;i++)
 	{
 		char dbuf[0x20];
-		dread(dbuf, 0x20, d_offset+i*0x20);
+		dread(dbuf, 0x20, i*0x20);
 		d_list[i]=d_decode(dbuf);
 		if(d_list[i].status!=0xe5)
 			uents++;

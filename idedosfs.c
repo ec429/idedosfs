@@ -203,7 +203,7 @@ static int ide_read(const char *path, char *buf, size_t size, off_t offset, stru
 	size_t len=(ech+1-sch)*d_st*bps;
 	if(offset>len) return(0);
 	if(size+offset>len) size=len-offset;
-	dread_havelock(buf, size, sch*bps+offset);
+	dread_havelock(buf, size, sch*d_st*bps+offset);
 	pthread_rwlock_unlock(&dmex);
 	return(size);
 }
@@ -217,7 +217,7 @@ static int ide_write(const char *path, const char *buf, size_t size, off_t offse
 	uint16_t bps=(d_8bit||HSD)?256:512;
 	size_t len=(ech+1-sch)*d_st*bps;
 	if(size+offset>len) return(-ENOSPC);
-	dwrite_havelock(buf, size, sch*bps+offset);
+	dwrite_havelock(buf, size, sch*d_st*bps+offset);
 	pthread_rwlock_unlock(&dmex);
 	return(size);
 }
