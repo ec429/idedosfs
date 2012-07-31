@@ -16,6 +16,7 @@ The xattrs are listed for each FS, below.
 	user.plus3dos.xdpb.nblocks	On +3DOS partitions, gives the number of blocks, from the eXDPB
 	user.plus3dos.xdpb.bsh	On +3DOS partitions, gives the Block SHift, from the eXDPB
 =plus3dosfs=
+	user.plus3dos.header	Indicates whether a file is headered; "1" for headered, "0" for headless.  Only empty files may be setxattr to "1", any file may be setxattr to "0".
 	user.plus3dos.plus3basic.filetype	Gives the file type (0 = BASIC program, 1 = Number array, 2 = Character array, 3 = Code file or SCREEN$)
 	user.plus3dos.plus3basic.line	On BASIC program files, gives the LINE value or 0x8000
 	user.plus3dos.plus3basic.prog	On BASIC program files, gives the start of the variable area (which is the second tape parameter)
