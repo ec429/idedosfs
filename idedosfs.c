@@ -364,13 +364,13 @@ int main(int argc, char *argv[])
 	struct stat st;
 	if(stat(hdf, &st))
 	{
-		fprintf(stderr, "idedosfs: Failed to stat %s\n", hdf);
+		fprintf(stderr, "idedosfs: Failed to stat '%s'\n", hdf);
 		perror("\tstat");
 		pthread_rwlock_destroy(&dmex);
 		return(1);
 	}
 	d_sz=st.st_size;
-	fprintf(stderr, "idedosfs: %s size is %jdB", hdf, (intmax_t)d_sz);
+	fprintf(stderr, "idedosfs: '%s' size is %jdB", hdf, (intmax_t)d_sz);
 	if(d_sz>2048)
 	{
 		const char *u="k";
@@ -399,7 +399,7 @@ int main(int argc, char *argv[])
 	{
 		if(errno==EWOULDBLOCK)
 		{
-			fprintf(stderr, "idedosfs: %s is locked by another process (flock: EWOULDBLOCK)\n", hdf);
+			fprintf(stderr, "idedosfs: '%s' is locked by another process (flock: EWOULDBLOCK)\n", hdf);
 		}
 		else
 			perror("idedosfs: flock");
@@ -415,16 +415,16 @@ int main(int argc, char *argv[])
 		pthread_rwlock_destroy(&dmex);
 		return(1);
 	}
-	fprintf(stderr, "idedosfs: %s mmap()ed in\n", hdf);
+	fprintf(stderr, "idedosfs: '%s' mmap()ed in\n", hdf);
 	int rv=EXIT_FAILURE;
 	if(memcmp(dm, "RS-IDE\032", 7))
 	{
-		fprintf(stderr, "idedosfs: %s is not a valid HDF file\n", hdf);
+		fprintf(stderr, "idedosfs: '%s' is not a valid HDF file\n", hdf);
 		goto shutdown;
 	}
 	if(dm[7]!=0x11)
 	{
-		fprintf(stderr, "idedosfs: %s is not a version 1.1 HDF file.\n\tOnly version 1.1 files are supported.\n", hdf);
+		fprintf(stderr, "idedosfs: '%s' is not a version 1.1 HDF file.\n\tOnly version 1.1 files are supported.\n", hdf);
 		goto shutdown;
 	}
 	pthread_rwlock_wrlock(&dmex);
@@ -443,7 +443,7 @@ int main(int argc, char *argv[])
 	pthread_rwlock_unlock(&dmex);
 	if(memcmp(sp.pn, "PLUSIDEDOS      ", 16))
 	{
-		fprintf(stderr, "idedosfs: %s is not formatted\n\tno PLUSIDEDOS system partition!\n", hdf);
+		fprintf(stderr, "idedosfs: '%s' is not formatted\n\tno PLUSIDEDOS system partition!\n", hdf);
 		fprintf(stderr, "idedosfs: sp.pn = %.16s\n", sp.pn);
 		goto shutdown;
 	}
@@ -453,12 +453,12 @@ int main(int argc, char *argv[])
 	pthread_rwlock_unlock(&dmex);
 	if(sp.pt!=0x01)
 	{
-		fprintf(stderr, "idedosfs: %s is not formatted\n\tsp.pt = 0x%02x != 0x01\n", hdf, sp.pt);
+		fprintf(stderr, "idedosfs: '%s' is not formatted\n\tsp.pt = 0x%02x != 0x01\n", hdf, sp.pt);
 		goto shutdown;
 	}
 	if(sp.sc)
 	{
-		fprintf(stderr, "idedosfs: %s is not formatted\n\tsp.sc = 0x%04x != 0x0000\n", hdf, sp.sc);
+		fprintf(stderr, "idedosfs: '%s' is not formatted\n\tsp.sc = 0x%04x != 0x0000\n", hdf, sp.sc);
 		goto shutdown;
 	}
 	pthread_rwlock_wrlock(&dmex);
