@@ -1,5 +1,7 @@
 #!/bin/bash
 
+mkdir -p mnt sub
+
 ./idedosfs $1 mnt || exit
 
 for p in mnt/by-index/*; do
