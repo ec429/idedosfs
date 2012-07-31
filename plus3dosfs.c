@@ -123,7 +123,7 @@ static int plus3_getattr(const char *path, struct stat *st)
 		return(-ENOENT);
 	pthread_rwlock_rdlock(&dmex);
 	st->st_mode=S_IFREG | (d_list[i].ro?0500:0700);
-	st->st_size=128*d_list[i].rcount+d_list[i].bcount;
+	st->st_size=(d_list[i].rcount<<7)+d_list[i].bcount;
 	// grovel for the header
 	off_t where=(((off_t)d_list[i].al[0])<<(7+d_bsh));
 	if(memcmp(dm+where, "PLUS3DOS\032", 9)==0)
@@ -667,6 +667,8 @@ static int plus3_getxattr(const char *path, const char *name, char *value, size_
 	}
 	else if(header&&(dm[where+15]==3)&&(strcmp(name, "user.plus3dos.plus3basic.addr")==0))
 		snprintf(result, 256, "%u%n", (uint16_t)read16(dm+where+18), &rlen);
+	else if(strcmp(name, "user.plus3dos.header")==0)
+		snprintf(result, 256, "%u%n", header?1:0, &rlen);
 	pthread_rwlock_unlock(&dmex);
 	if(!rlen) return(-ENOATTR);
 	if(vlen)
@@ -788,6 +790,30 @@ static int plus3_setxattr(const char *path, const char *name, const char *value,
 		}
 		return(-EINVAL);
 	}
+	else if(strcmp(name, "user.plus3dos.header")==0)
+	{
+		unsigned int h;
+		if(sscanf(value, "%u", &h)==1)
+		{
+			pthread_rwlock_wrlock(&dmex);
+			bool nh=h;
+			if(nh!=header)
+			{
+				if(nh)
+				{
+					pthread_rwlock_unlock(&dmex);
+					return(-ENOSYS);
+				}
+				else
+				{
+					memcpy(dm+where, "NOHEADER", 8);
+				}
+			}
+			pthread_rwlock_unlock(&dmex);
+			return(0);
+		}
+		return(-EINVAL);
+	}
 	return(-ENOATTR);
 }
 
@@ -835,6 +861,7 @@ static int plus3_listxattr(const char *path, char *list, size_t size)
 			break;
 		}
 	}
+	xattrs[nxattrs++]="user.plus3dos.header";
 	size_t listsize=0;
 	for(size_t i=0;i<nxattrs;i++)
 		listsize+=strlen(xattrs[i])+1;
@@ -1176,6 +1203,8 @@ uint16_t disk_alloc(void)
 		if(!d_bitmap[i])
 		{
 			d_bitmap[i]=true;
+			off_t where=((off_t)i)<<(7+d_bsh);
+			memset(dm+where, 0, 1<<(7+d_bsh)); // zero the newly allocated block
 			fprintf(stderr, "disk_alloc: %zu\n", i);
 			return(i);
 		}
