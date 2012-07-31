@@ -1,1 +1,5 @@
-cp --preserve=xattr "$@"
+#!/bin/bash
+
+touch "$2"
+setfattr -n user.plus3dos.header -v 1 "$2"
+cp --preserve=xattr "$1" "$2" $3

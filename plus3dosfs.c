@@ -806,6 +806,7 @@ static int plus3_setxattr(const char *path, const char *name, const char *value,
 							off_t where=(((off_t)d_list[i].al[0])<<(7+d_bsh));
 							memcpy(dm+where, hbuf, 128);
 							d_list[i].rcount=0x10;
+							pthread_rwlock_unlock(&dmex);
 							return(0);
 						}
 						else
