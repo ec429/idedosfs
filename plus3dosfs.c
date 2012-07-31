@@ -3,18 +3,18 @@
 	Copyright (C) 2012 Edward Cree <ec429@cantab.net>
 
 	This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation; either version 2 of the License, or
+	(at your option) any later version.
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
 
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+	You should have received a copy of the GNU General Public License
+	along with this program; if not, write to the Free Software
+	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 */
 
 #define FUSE_USE_VERSION 26
@@ -75,10 +75,37 @@ static int32_t extent_alloc(plus3_dirent last, uint16_t extent); // allocates an
 
 static int plus3_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi);
 
-#define read16(p)	(((unsigned char *)p)[0]|(((unsigned char *)p)[1]<<8))
-#define read32(p)	(((unsigned char *)p)[0]|(((unsigned char *)p)[1]<<8)|(((unsigned char *)p)[2]<<16)|(((unsigned char *)p)[3]<<24))
-#define write16(p,v)	(((unsigned char *)p)[0]=((uint8_t)v)),(((unsigned char *)p)[1]=((uint8_t)v)>>8)
-#define write32(p,v)	(((unsigned char *)p)[0]=((uint8_t)v)),(((unsigned char *)p)[1]=((uint8_t)v)>>8),(((unsigned char *)p)[2]=((uint8_t)v)>>16),(((unsigned char *)p)[3]=((uint8_t)v)>>24)
+static uint16_t read16(const char *p)
+{
+	return(
+		((unsigned char *)p)[0]
+		|(((unsigned char *)p)[1]<<8)
+	);
+}
+
+static uint32_t read32(const char *p)
+{
+	return(
+		((const unsigned char *)p)[0]
+		|(((const unsigned char *)p)[1]<<8)
+		|(((const unsigned char *)p)[2]<<16)
+		|(((const unsigned char *)p)[3]<<24)
+	);
+}
+
+static void write16(char *p, uint16_t v)
+{
+	((unsigned char *)p)[0]=(uint8_t)v;
+	((unsigned char *)p)[1]=(uint8_t)(v>>8);
+}
+
+static void write32(char *p, uint16_t v)
+{
+	((unsigned char *)p)[0]=(uint8_t)v;
+	((unsigned char *)p)[1]=(uint8_t)(v>>8);
+	((unsigned char *)p)[2]=(uint8_t)(v>>16);
+	((unsigned char *)p)[3]=(uint8_t)(v>>24);
+}
 
 static int plus3_getattr(const char *path, struct stat *st)
 {
@@ -216,7 +243,15 @@ static int plus3_create(const char *path, mode_t mode, struct fuse_file_info *fi
 			for(size_t i=0;i<127;i++)
 				ck+=hbuf[i];
 			hbuf[127]=ck;
-			plus3_write(path, hbuf, 128, 0, fi);
+			pthread_rwlock_wrlock(&dmex);
+			if((d_list[i].al[0]=disk_alloc()))
+			{
+				d_list[i].rcount=1<<d_bsh;
+				off_t where=(((off_t)d_list[i].al[0])<<(7+d_bsh));
+				memcpy(dm+where, hbuf, 128);
+			}
+			d_encode(dm+i*0x20, d_list[i]);
+			pthread_rwlock_unlock(&dmex);
 			return(0);
 		}
 		return(-ENOSPC);
@@ -363,8 +398,8 @@ static int plus3_write(const char *path, const char *buf, size_t size, off_t off
 				if(offset+size>hsize)
 				{
 					fprintf(stderr, "Extended file to length %zu\n", (size_t)(offset+size));
-					write32(dm+where+11, offset+size);
-					write16(dm+where+16, offset+size-128);
+					write32(dm+where+11, (size_t)(offset+size));
+					write16(dm+where+16, (size_t)(offset+size-128));
 				}
 				ck=0;
 				for(size_t i=0;i<127;i++)
@@ -374,7 +409,15 @@ static int plus3_write(const char *path, const char *buf, size_t size, off_t off
 		}
 	}
 	uint32_t blocknum=offset>>(7+d_bsh), endblocknum=(offset+size-1)>>(7+d_bsh);
+	uint16_t extent=blocknum/(d_manyblocks?8:16);
+	plus3_dirent last=d_list[i];
+	pthread_rwlock_unlock(&dmex);
+	i=lookup_extent(path, extent);
+	pthread_rwlock_wrlock(&dmex);
+	if(i<0)
+		i=extent_alloc(last, extent);
 	uint32_t transferred=0, len=1<<(7+d_bsh);
+	fprintf(stderr, "extent %u\n", extent);
 	for(uint32_t b=blocknum;b<=endblocknum;b++)
 	{
 		uint16_t extent=b/(d_manyblocks?8:16);
@@ -425,6 +468,7 @@ static int plus3_write(const char *path, const char *buf, size_t size, off_t off
 			d_list[i].bcount=0;
 			d_encode(dm+i*0x20, d_list[i]);
 		}
+		fprintf(stderr, "b=%u, i=%d, where=%zu, transferred=%zu, len=%zu\n", b, i, (size_t)where, transferred, len);
 		if((i>=0)&&where)
 			memcpy(dm+where+((offset+transferred)%(1<<(7+d_bsh))), buf+transferred, len);
 		transferred+=len;
@@ -1132,6 +1176,7 @@ uint16_t disk_alloc(void)
 		if(!d_bitmap[i])
 		{
 			d_bitmap[i]=true;
+			fprintf(stderr, "disk_alloc: %zu\n", i);
 			return(i);
 		}
 	}
@@ -1149,6 +1194,7 @@ static int32_t extent_alloc(plus3_dirent last, uint16_t extent)
 			d_list[i].rcount=d_list[i].bcount=0;
 			memset(d_list[i].al, 0, 0x10);
 			d_encode(dm+i*0x20, d_list[i]);
+			fprintf(stderr, "extent_alloc: %zu\n", i);
 			return(i);
 		}
 	}
