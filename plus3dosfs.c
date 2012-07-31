@@ -216,7 +216,7 @@ static int plus3_create(const char *path, mode_t mode, struct fuse_file_info *fi
 			nm[ne]=' ';
 		if(path[nl])
 		{
-			if(path[nl++]!='.') return(-ENOENT);
+			if(path[nl++]!='.') return(-ENAMETOOLONG);
 			for(;ee<3;ee++)
 			{
 				if(!path[nl+ee]) break;
