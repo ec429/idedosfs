@@ -1,0 +1,30 @@
+idedosfs: FUSE filesystem module for IDEDOS hard disk images
+plus3dosfs: FUSE filesystem module for +3DOS partitions within an idedosfs
+
+To start idedosfs just run "./start <hdf-file>"; this will start idedosfs on <hdf-file> (mounting on mnt/) and then, for each partition in the image, if the type is supported, start its fs (mounting on sub/<partition-index>).  For now the only supported type is 0x03 "+3DOS", which is handled by plus3dosfs.
+
+To stop idedosfs just run "./stop"; this will unmount the sub/ mounts and then unmount mnt/.
+
+Extended File Attributes:
+All the FSes use xattrs to communicate out-of-band data like file/partition types.
+To read these you will need getfattr(2) or the <attr/xattr.h> functions.  On Debian these are packaged in 'attr' and 'libattr1-dev'.
+The xattrs are listed for each FS, below.
+=idedosfs=
+	user.idedos.pt	On partitions, gives the IDEDOS partition type (eg. "1" = IDEDOS System Partition, "3" = +3DOS)
+	user.plus3dos.xdpb.ndirent	On +3DOS partitions, gives the number of directory entries, from the eXDPB
+	user.plus3dos.xdpb.nblocks	On +3DOS partitions, gives the number of blocks, from the eXDPB
+	user.plus3dos.xdpb.bsh	On +3DOS partitions, gives the Block SHift, from the eXDPB
+=plus3dosfs=
+	user.plus3dos.plus3basic.filetype	Gives the file type (0 = BASIC program, 1 = Number array, 2 = Character array, 3 = Code file or SCREEN$)
+	user.plus3dos.plus3basic.line	On BASIC program files, gives the LINE value or 0x8000
+	user.plus3dos.plus3basic.prog	On BASIC program files, gives the start of the variable area (which is the second tape parameter)
+	user.plus3dos.plus3basic.name	On array files, gives the array's name
+	user.plus3dos.plus3basic.addr	On code files, gives the code address
+
+Known Bugs:
+=idedosfs=
+*	Writing isn't supported yet.
+=plus3dosfs=
+*	Files which span more than one extent aren't handled currently; only data in the first extent can be read.
+*	The offset for the start of the data isn't being calculated (because I don't know how); it's just grovelling the partition until it finds some data.
+*	Writing isn't supported yet, nor file-creation, or indeed anything but readdir/getattr/open/read.
