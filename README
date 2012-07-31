@@ -29,4 +29,6 @@ Known Bugs:
 =plus3dosfs=
 *	write() may silently fail to write out data in an ENOSPC condition (if disk_alloc or extent_alloc fails)
 *	Trying to cpx a file with headers will fail as cp writes the data first then tries to set the xattrs.  At present you can't headerify a nonempty file with setxattr()
-*	It is assumed (incorrectly) that the first extent of a file has extent number 0.  This can break with sparse files.
+*	It is assumed (incorrectly) that the first extent of a file has extent number 0.  This can break with sparse files
+*	Illegal characters <>.,;:=?*[] are permitted in filenames (actually, '.' is only permitted in extensions)
+*	Conversely, / is legal in CP/M filenames, but not in Unix.  I may map it to ,
