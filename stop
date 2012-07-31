@@ -1,0 +1,7 @@
+#!/bin/bash
+
+for p in sub/*; do
+	fusermount -u $p || echo "Failed to unmount '$p'"
+done
+
+fusermount -u mnt || echo "Failed to unmount 'mnt'"

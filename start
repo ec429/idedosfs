@@ -1,0 +1,24 @@
+#!/bin/bash
+
+./idedosfs $1 mnt || exit
+
+for p in mnt/by-index/*; do
+	TYPE=$(getfattr $p -n user.idedos.pt --only-values)
+	SUB=sub/$(basename $p)
+	case "$TYPE" in
+		1)
+			# ignore it, it's the System Partition
+		;;
+		3)
+			mkdir -p "$SUB"
+			if ./plus3dosfs $p "$SUB"; then
+				echo "Mounted $p as +3DOS under $SUB"
+			else
+				echo "Failed to mount $p as +3DOS under $SUB"
+			fi
+		;;
+		*)
+			echo "Don't know how to mount $p, is type $TYPE"
+		;;
+	esac
+done
