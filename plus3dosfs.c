@@ -153,9 +153,64 @@ static int plus3_open(const char *path, struct fuse_file_info *fi)
 	if(path[0]!='/') return(-ENOENT);
 	int32_t i=lookup(path);
 	if((i<0)||(i>=(int32_t)d_ndirent))
+	{
+		if(fi->flags&O_CREAT)
+			return(-ENOSYS);
 		return(-ENOENT);
+	}
+	if((fi->flags&O_CREAT)&&(fi->flags&O_EXCL)) return(-EEXIST);
 	fi->fh=i;
 	return(0);
+}
+
+static int plus3_create(const char *path, mode_t mode, struct fuse_file_info *fi)
+{
+	if(fi->flags&O_SYNC) return(-ENOSYS);
+	if(strcmp(path, "/")==0)
+		return(-EISDIR);
+	if(path[0]!='/') return(-ENOENT);
+	int32_t i=lookup(path);
+	if((i<0)||(i>=(int32_t)d_ndirent))
+	{
+		path++;
+		char nm[8], ex[3];
+		size_t ne,nl,ee=0;
+		for(ne=0;ne<8;ne++)
+		{
+			if(path[ne]=='.') break;
+			if(!path[ne]) break;
+			nm[ne]=path[ne];
+		}
+		nl=ne;
+		for(;ne<8;ne++)
+			nm[ne]=' ';
+		if(path[nl])
+		{
+			if(path[nl++]!='.') return(-ENOENT);
+			for(;ee<3;ee++)
+			{
+				if(!path[nl+ee]) break;
+				ex[ee]=path[nl+ee];
+			}
+		}
+		for(;ee<3;ee++)
+			ex[ee]=' ';
+		plus3_dirent last;
+		last.status=0;
+		memcpy(last.name, nm, 8);
+		memcpy(last.ext, ex, 3);
+		last.ro=last.sys=last.ar=false;
+		pthread_rwlock_wrlock(&dmex);
+		i=extent_alloc(last, 0);
+		pthread_rwlock_unlock(&dmex);
+		if(i>=0)
+		{
+			fi->fh=i;
+			return(0);
+		}
+		return(-ENOSPC);
+	}
+	return(-EEXIST);
 }
 
 static int plus3_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
@@ -221,22 +276,31 @@ static int plus3_write(const char *path, const char *buf, size_t size, off_t off
 		return(-ENOENT);
 	pthread_rwlock_wrlock(&dmex);
 	// grovel for the header
-	off_t where=(((off_t)d_list[i].al[0])<<(7+d_bsh));
-	if(memcmp(dm+where, "PLUS3DOS\032", 9)==0)
+	bool noblocks=!d_list[i].al[0];
+	off_t where=0;
+	if(!noblocks)
 	{
-		uint32_t hsize=read32(dm+where+11);
-		uint8_t ck=0; // header checksum
-		for(size_t i=0;i<127;i++)
-			ck+=dm[where+i];
-		if(ck==(uint8_t)dm[where+127])
+		where=(((off_t)d_list[i].al[0])<<(7+d_bsh));
+		if(memcmp(dm+where, "PLUS3DOS\032", 9)==0)
 		{
-			offset+=128;
-			if(offset+size>hsize)
-				write32(dm+where+11, offset+size);
-			ck=0;
+			uint32_t hsize=read32(dm+where+11);
+			fprintf(stderr, "hsize = %zu\n", (size_t)hsize);
+			uint8_t ck=0; // header checksum
 			for(size_t i=0;i<127;i++)
 				ck+=dm[where+i];
-			dm[where+127]=ck;
+			if(ck==(uint8_t)dm[where+127])
+			{
+				offset+=128;
+				if(offset+size>hsize)
+				{
+					fprintf(stderr, "Extended file to length %zu\n", (size_t)(offset+size));
+					write32(dm+where+11, offset+size);
+				}
+				ck=0;
+				for(size_t i=0;i<127;i++)
+					ck+=dm[where+i];
+				dm[where+127]=ck;
+			}
 		}
 	}
 	uint32_t blocknum=offset>>(7+d_bsh), endblocknum=(offset+size-1)>>(7+d_bsh);
@@ -258,7 +322,9 @@ static int plus3_write(const char *path, const char *buf, size_t size, off_t off
 		else if(b)
 		{
 			plus3_dirent last=d_list[i];
+			pthread_rwlock_unlock(&dmex);
 			i=lookup_extent(path, extent);
+			pthread_rwlock_wrlock(&dmex);
 			if(i<0)
 				i=extent_alloc(last, extent);
 			if(i>=0)
@@ -270,10 +336,25 @@ static int plus3_write(const char *path, const char *buf, size_t size, off_t off
 					where=0;
 			}
 		}
-		if(i>=0)
-			d_encode(dm+i*0x20, d_list[i]);
+		else if(noblocks)
+		{
+			if(i>=0)
+			{
+				if(!d_list[i].al[0]) d_list[i].al[0]=disk_alloc();
+				if(d_list[i].al[0])
+					where=(((off_t)d_list[i].al[0])<<(7+d_bsh));
+				else
+					where=0;
+			}
+		}
 		if(transferred+len>size)
 			len=size-transferred;
+		if(i>=0)
+		{
+			d_list[i].rcount=(b%(d_manyblocks?8:16))<<d_bsh;
+			d_list[i].bcount=len&0x7f;
+			d_encode(dm+i*0x20, d_list[i]);
+		}
 		if((i>=0)&&where)
 			memcpy(dm+where+((offset+transferred)%(1<<(7+d_bsh))), buf+transferred, len);
 		transferred+=len;
@@ -343,6 +424,7 @@ static int plus3_truncate(const char *path, off_t offset)
 	ex[3]=0;
 	if(!offset)
 	{
+		d_list[i].rcount=d_list[i].bcount=0;
 		for(unsigned int b=0;b<(d_manyblocks?8:16);b++)
 		{
 			if(d_list[i].al[b])
@@ -560,6 +642,7 @@ static struct fuse_operations plus3_oper = {
 	.truncate	= plus3_truncate,
 	/*.utimens	= plus3_utimens,*/
 	.open		= plus3_open,
+	.create		= plus3_create,
 	.read		= plus3_read,
 	.write		= plus3_write,
 	/*.statfs		= plus3_statfs,
