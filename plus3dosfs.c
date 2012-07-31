@@ -560,7 +560,7 @@ int main(int argc, char *argv[])
 	struct stat st;
 	if(stat(df, &st))
 	{
-		fprintf(stderr, "plus3dosfs: Failed to stat %s\n", df);
+		fprintf(stderr, "plus3dosfs: Failed to stat '%s'\n", df);
 		perror("\tstat");
 		pthread_rwlock_destroy(&dmex);
 		return(1);
@@ -574,11 +574,11 @@ int main(int argc, char *argv[])
 	}
 	if(strncmp(ptbuf, "3", ptlen))
 	{
-		fprintf(stderr, "plus3dosfs: %s is not a +3DOS partition\n\tuser.idedos.pt=%s\n", df, ptbuf);
+		fprintf(stderr, "plus3dosfs: '%s' is not a +3DOS partition\n\tuser.idedos.pt=%s\n", df, ptbuf);
 		return(1);
 	}
 	d_sz=st.st_size;
-	fprintf(stderr, "plus3dosfs: %s size is %jdB", df, (intmax_t)d_sz);
+	fprintf(stderr, "plus3dosfs: '%s' size is %jdB", df, (intmax_t)d_sz);
 	if(d_sz>2048)
 	{
 		const char *u="k";
@@ -607,7 +607,7 @@ int main(int argc, char *argv[])
 	{
 		if(errno==EWOULDBLOCK)
 		{
-			fprintf(stderr, "plus3dosfs: %s is locked by another process (flock: EWOULDBLOCK)\n", df);
+			fprintf(stderr, "plus3dosfs: '%s' is locked by another process (flock: EWOULDBLOCK)\n", df);
 		}
 		else
 			perror("plus3dosfs: flock");
@@ -623,7 +623,7 @@ int main(int argc, char *argv[])
 		pthread_rwlock_destroy(&dmex);
 		return(1);
 	}
-	fprintf(stderr, "plus3dosfs: %s mmap()ed in\n", df);
+	fprintf(stderr, "plus3dosfs: '%s' mmap()ed in\n", df);
 	int rv=EXIT_FAILURE;
 	
 	char ndbuf[6];
