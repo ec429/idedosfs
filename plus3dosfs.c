@@ -63,10 +63,12 @@ uint8_t d_bsh; // BSH (Block SHift)
 off_t d_offset; // offset of the start of the data
 bool d_manyblocks; // if true, there are only 8 block pointers in a dirent as each block pointer is 2 bytes
 plus3_dirent *d_list=NULL;
+bool *d_bitmap=NULL; // disk block map, true if in use
 
 static void dread(char *buf, size_t bytes, off_t offset);
 plus3_dirent d_decode(const char buf[0x20]);
 int32_t lookup(const char *path);
+int32_t lookup_extent(const char *path, uint16_t extent);
 
 #define read16(p)	(((unsigned char *)p)[0]|(((unsigned char *)p)[1]<<8))
 #define read32(p)	(((unsigned char *)p)[0]|(((unsigned char *)p)[1]<<8)|(((unsigned char *)p)[2]<<16)|(((unsigned char *)p)[3]<<24))
@@ -82,7 +84,7 @@ static int plus3_getattr(const char *path, struct stat *st)
 		return(0);
 	}
 	if(path[0]!='/') return(-ENOENT);
-	int32_t i=lookup(path+1);
+	int32_t i=lookup(path);
 	if((i<0)||(i>=(int32_t)d_ndirent))
 		return(-ENOENT);
 	pthread_rwlock_rdlock(&dmex);
@@ -143,7 +145,7 @@ static int plus3_open(const char *path, struct fuse_file_info *fi)
 		return(-EISDIR);
 	}
 	if(path[0]!='/') return(-ENOENT);
-	int32_t i=lookup(path+1);
+	int32_t i=lookup(path);
 	if((i<0)||(i>=(int32_t)d_ndirent))
 		return(-ENOENT);
 	fi->fh=i;
@@ -159,7 +161,6 @@ static int plus3_read(const char *path, char *buf, size_t size, off_t offset, st
 	// grovel for the header
 	off_t where=d_offset+(((off_t)d_list[i].al[0])<<(7+d_bsh));
 	bool header=false;
-	size_t len=128*d_list[i].rcount+d_list[i].bcount;
 	if(memcmp(dm+where, "PLUS3DOS\032", 9)==0)
 	{
 		uint32_t size=read32(dm+where+11);
@@ -167,53 +168,36 @@ static int plus3_read(const char *path, char *buf, size_t size, off_t offset, st
 		for(size_t i=0;i<127;i++)
 			ck+=dm[where+i];
 		if(ck==(uint8_t)dm[where+127])
-		{
 			header=true;
-			len=size;
-		}
 	}
-	if(offset>len)
+	if(header) offset+=128;
+	uint32_t blocknum=offset>>(7+d_bsh), endblocknum=(offset+size-1)>>(7+d_bsh);
+	fprintf(stderr, "%u - %u\n", blocknum, endblocknum);
+	uint32_t transferred=0, len=1<<(7+d_bsh);
+	for(uint32_t b=blocknum;b<=endblocknum;b++)
 	{
-		pthread_rwlock_unlock(&dmex);
-		return(0);
-	}
-	if(offset+size>len)
-		size=len-offset;
-	uint32_t blocknum=offset>>(7+d_bsh), endblocknum=(offset+size)>>(7+d_bsh);
-	if(!(blocknum||endblocknum))
-		memcpy(buf, dm+where+(header?128:0), size);
-	else
-	{
-		uint32_t transferred=0, len;
-		for(uint32_t b=blocknum;b<=endblocknum;b++)
+		if(b%(d_manyblocks?8:16))
 		{
-			if(b<(d_manyblocks?16:8))
-				where=d_offset+(((off_t)d_list[i].al[b])<<(7+d_bsh));
-			else
-			{
-				fprintf(stderr, "plus3dosfs: File covers more than one extent; can't handle this yet!\n");
-				pthread_rwlock_unlock(&dmex);
-				return(-EIO);
-			}
-			if(b==blocknum)
-			{
-				len=((blocknum+1)<<(7+d_bsh))-offset;
-				memcpy(buf, dm+where+((header&&!b)?128:0), len);
-			}
-			else if(b==endblocknum)
-			{
-				len=offset+size-(endblocknum<<(7+d_bsh));
-				memcpy(buf+transferred, dm+where, len);
-			}
-			else
-			{
-				len=1<<(7+d_bsh);
-				memcpy(buf+transferred, dm+where, len);
-			}
-			transferred+=len;
+			if(i>=0)
+				where=d_offset+(((off_t)d_list[i].al[b%(d_manyblocks?8:16)])<<(7+d_bsh));
 		}
-		size=transferred;
+		else if(b)
+		{
+			uint16_t extent=b/(d_manyblocks?8:16);
+			i=lookup_extent(path, extent);
+			if(i>=0)
+				where=d_offset+(((off_t)d_list[i].al[0])<<(7+d_bsh));
+		}
+		fprintf(stderr, "at %04x, b=%02x\n", (unsigned int)(offset+transferred), (unsigned int)b);
+		if(transferred+len>size)
+			len=size-transferred;
+		if(i>=0)
+			memcpy(buf+transferred, dm+where+(offset+transferred)%(1<<(7+d_bsh)), len);
+		else
+			memset(buf+transferred, 0, len);
+		transferred+=len;
 	}
+	size=transferred;
 	pthread_rwlock_unlock(&dmex);
 	return(size);
 }
@@ -222,7 +206,7 @@ static int plus3_getxattr(const char *path, const char *name, char *value, size_
 {
 	if(path[0]!='/') return(-ENOENT);
 	if(!path[1]) return(-ENOATTR);
-	int32_t i=lookup(path+1);
+	int32_t i=lookup(path);
 	if((i<0)||(i>=(int32_t)d_ndirent))
 		return(-ENOENT);
 	pthread_rwlock_rdlock(&dmex);
@@ -272,7 +256,7 @@ static int plus3_listxattr(const char *path, char *list, size_t size)
 {
 	if(path[0]!='/') return(-ENOENT);
 	if(!path[1]) return(0);
-	int32_t i=lookup(path+1);
+	int32_t i=lookup(path);
 	if((i<0)||(i>=(int32_t)d_ndirent))
 		return(-ENOENT);
 	pthread_rwlock_rdlock(&dmex);
@@ -459,7 +443,7 @@ int main(int argc, char *argv[])
 	}
 	if(!(d_list=malloc(d_ndirent*sizeof(plus3_dirent))))
 	{
-		perror("malloc");
+		perror("plus3dosfs: malloc");
 		goto shutdown;
 	}
 	if((ndlen=getxattr(df, "user.plus3dos.xdpb.nblocks", ndbuf, sizeof ndbuf))<0)
@@ -473,6 +457,13 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "plus3dosfs: Bad user.plus3dos.xdpb.nblocks = %s\n", ndbuf);
 		goto shutdown;
 	}
+	d_manyblocks=(d_nblocks>255);
+	if(!(d_bitmap=malloc(d_nblocks*sizeof(bool))))
+	{
+		perror("plus3dosfs: malloc");
+		goto shutdown;
+	}
+	memset(d_bitmap, 0, d_nblocks*sizeof(bool)); // set them all to false (free)
 	char bshbuf[6];
 	ssize_t bshlen;
 	if((bshlen=getxattr(df, "user.plus3dos.xdpb.bsh", bshbuf, sizeof bshbuf))<0)
@@ -486,7 +477,8 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "plus3dosfs: Bad user.plus3dos.xdpb.bsh = %s\n", bshbuf);
 		goto shutdown;
 	}
-	d_manyblocks=(d_nblocks>255);
+	for(size_t i=0;(i<<(7+d_bsh))<0x20*d_ndirent;i++) // mark the dirents' blocks as used
+		d_bitmap[i]=true;
 	
 	d_offset=0;
 	/* Magic d_offset autodetection, because I can't work out which eXDPB params control it */
@@ -509,6 +501,12 @@ int main(int argc, char *argv[])
 		d_list[i]=d_decode(dbuf);
 		if(d_list[i].status!=0xe5)
 			uents++;
+		if(d_list[i].status<16)
+		{
+			fprintf(stderr, "%.8s.%.3s %04x\n", d_list[i].name, d_list[i].ext, (unsigned int)d_list[i].xnum);
+			for(unsigned int b=0;b<(d_manyblocks?8:16);b++)
+				if(d_list[i].al[b]) d_bitmap[d_list[i].al[b]]=true;
+		}
 	}
 	fprintf(stderr, "plus3dosfs: Used %zu of %zu dirents\n", uents, d_ndirent);
 	
@@ -573,6 +571,12 @@ plus3_dirent d_decode(const char buf[0x20])
 
 int32_t lookup(const char *path)
 {
+	return(lookup_extent(path, 0));
+}
+
+int32_t lookup_extent(const char *path, uint16_t extent)
+{
+	if(*path++!='/') return(-1);
 	char nm[9], ex[4];
 	size_t ne,nl,ee=0;
 	for(ne=0;ne<8;ne++)
@@ -600,7 +604,7 @@ int32_t lookup(const char *path)
 	pthread_rwlock_rdlock(&dmex);
 	for(uint32_t i=0;i<d_ndirent;i++)
 	{
-		if((d_list[i].status<16)&&!d_list[i].xnum)
+		if((d_list[i].status<16)&&(d_list[i].xnum==extent))
 		{
 			if(!memcmp(nm, d_list[i].name, 8))
 				if(!memcmp(ex, d_list[i].ext, 3))

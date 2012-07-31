@@ -2,7 +2,7 @@
 
 mkdir -p mnt sub
 
-./idedosfs $1 mnt || exit
+./idedosfs "$1" mnt $2 || exit
 
 for p in mnt/by-index/*; do
 	TYPE=$(getfattr $p -n user.idedos.pt --only-values)
@@ -13,7 +13,7 @@ for p in mnt/by-index/*; do
 		;;
 		3)
 			mkdir -p "$SUB"
-			if ./plus3dosfs $p "$SUB"; then
+			if ./plus3dosfs $p "$SUB" $3; then
 				echo "Mounted $p as +3DOS under $SUB"
 			else
 				echo "Failed to mount $p as +3DOS under $SUB"
