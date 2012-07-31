@@ -334,20 +334,20 @@ int main(int argc, char *argv[])
 	}
 	if(pthread_rwlock_init(&dmex, NULL))
 	{
-		perror("pthread_rwlock_init");
+		perror("idedosfs: pthread_rwlock_init");
 		return(1);
 	}
 	const char *hdf=argv[1];
 	struct stat st;
 	if(stat(hdf, &st))
 	{
-		fprintf(stderr, "Failed to stat %s\n", hdf);
+		fprintf(stderr, "idedosfs: Failed to stat %s\n", hdf);
 		perror("\tstat");
 		pthread_rwlock_destroy(&dmex);
 		return(1);
 	}
 	d_sz=st.st_size;
-	fprintf(stderr, "%s size is %jdB", hdf, (intmax_t)d_sz);
+	fprintf(stderr, "idedosfs: %s size is %jdB", hdf, (intmax_t)d_sz);
 	if(d_sz>2048)
 	{
 		const char *u="k";
@@ -368,7 +368,7 @@ int main(int argc, char *argv[])
 	int dfd=open(hdf, O_RDWR);
 	if(dfd<0)
 	{
-		perror("open");
+		perror("idedosfs: open");
 		pthread_rwlock_destroy(&dmex);
 		return(1);
 	}
@@ -376,43 +376,43 @@ int main(int argc, char *argv[])
 	{
 		if(errno==EWOULDBLOCK)
 		{
-			fprintf(stderr, "%s is locked by another process (flock: EWOULDBLOCK)\n", hdf);
+			fprintf(stderr, "idedosfs: %s is locked by another process (flock: EWOULDBLOCK)\n", hdf);
 		}
 		else
-			perror("flock");
+			perror("idedosfs: flock");
 		pthread_rwlock_destroy(&dmex);
 		return(1);
 	}
 	dm=mmap(NULL, d_sz, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_POPULATE, dfd, 0);
 	if(!dm)
 	{
-		perror("mmap");
+		perror("idedosfs: mmap");
 		flock(dfd, LOCK_UN);
 		close(dfd);
 		pthread_rwlock_destroy(&dmex);
 		return(1);
 	}
-	fprintf(stderr, "%s mmap()ed in\n", hdf);
+	fprintf(stderr, "idedosfs: %s mmap()ed in\n", hdf);
 	int rv=EXIT_FAILURE;
 	if(memcmp(dm, "RS-IDE\032", 7))
 	{
-		fprintf(stderr, "%s is not a valid HDF file\n", hdf);
+		fprintf(stderr, "idedosfs: %s is not a valid HDF file\n", hdf);
 		goto shutdown;
 	}
 	if(dm[7]!=0x11)
 	{
-		fprintf(stderr, "%s is not a version 1.1 HDF file.\n\tOnly version 1.1 files are supported.\n", hdf);
+		fprintf(stderr, "idedosfs: %s is not a version 1.1 HDF file.\n\tOnly version 1.1 files are supported.\n", hdf);
 		goto shutdown;
 	}
 	pthread_rwlock_wrlock(&dmex);
-	fprintf(stderr, "HDDOFF = %04x%s\n", HDDOFF, HSD?", HSD":"");
+	fprintf(stderr, "idedosfs: HDDOFF = %04x%s\n", HDDOFF, HSD?", HSD":"");
 	d_8bit=false;
 	char syspart[0x40];
 	dread_havelock(syspart, 0x40, 0);
 	partent sp=p_decode(syspart);
 	if((!HSD)&&memcmp(sp.pn, "PLUSIDEDOS      ", 16))
 	{
-		fprintf(stderr, "sp.pn = %.16s\nTrying d_8bit...\n", sp.pn);
+		fprintf(stderr, "idedosfs: sp.pn = %.16s\nTrying d_8bit...\n", sp.pn);
 		d_8bit=true;
 		dread_havelock(syspart, 0x40, 0);
 		sp=p_decode(syspart);
@@ -420,22 +420,22 @@ int main(int argc, char *argv[])
 	pthread_rwlock_unlock(&dmex);
 	if(memcmp(sp.pn, "PLUSIDEDOS      ", 16))
 	{
-		fprintf(stderr, "%s is not formatted\n\tno PLUSIDEDOS system partition!\n", hdf);
-		fprintf(stderr, "sp.pn = %.16s\n", sp.pn);
+		fprintf(stderr, "idedosfs: %s is not formatted\n\tno PLUSIDEDOS system partition!\n", hdf);
+		fprintf(stderr, "idedosfs: sp.pn = %.16s\n", sp.pn);
 		goto shutdown;
 	}
 	pthread_rwlock_rdlock(&dmex);
 	if(d_8bit)
-		fprintf(stderr, "8bit disk detected\n");
+		fprintf(stderr, "idedosfs: 8bit disk detected\n");
 	pthread_rwlock_unlock(&dmex);
 	if(sp.pt!=0x01)
 	{
-		fprintf(stderr, "%s is not formatted\n\tsp.pt = 0x%02x != 0x01\n", hdf, sp.pt);
+		fprintf(stderr, "idedosfs: %s is not formatted\n\tsp.pt = 0x%02x != 0x01\n", hdf, sp.pt);
 		goto shutdown;
 	}
 	if(sp.sc)
 	{
-		fprintf(stderr, "%s is not formatted\n\tsp.sc = 0x%04x != 0x0000\n", hdf, sp.sc);
+		fprintf(stderr, "idedosfs: %s is not formatted\n\tsp.sc = 0x%04x != 0x0000\n", hdf, sp.sc);
 		goto shutdown;
 	}
 	pthread_rwlock_wrlock(&dmex);
@@ -445,7 +445,7 @@ int main(int argc, char *argv[])
 	d_np=read16(sp.td+0x0B)+1;
 	if(!(p_list=malloc(d_np*sizeof(partent))))
 	{
-		perror("malloc");
+		perror("idedosfs: malloc");
 		pthread_rwlock_unlock(&dmex);
 		goto shutdown;
 	}
@@ -460,13 +460,13 @@ int main(int argc, char *argv[])
 		switch(p_list[i].pt)
 		{
 			case 0:
-				fprintf(stderr, "partent %04x: unused\n", i);
+				fprintf(stderr, "idedosfs: partent %04x: unused\n", i);
 			break;
 			case 0xfe:
-				fprintf(stderr, "partent %04x: bad space\n", i);
+				fprintf(stderr, "idedosfs: partent %04x: bad space\n", i);
 			break;
 			case 0xff:
-				fprintf(stderr, "partent %04x: free space\n", i);
+				fprintf(stderr, "idedosfs: partent %04x: free space\n", i);
 			break;
 			case 3: // +3DOS
 			{
@@ -484,7 +484,7 @@ int main(int argc, char *argv[])
 			}
 			/* fallthrough */
 			default:
-				fprintf(stderr, "partent %04x: type %02x, name '%.16s'\n", i, p_list[i].pt, p_list[i].pn);
+				fprintf(stderr, "idedosfs: partent %04x: type %02x, name '%.16s'\n", i, p_list[i].pt, p_list[i].pn);
 		}
 	}
 	pthread_rwlock_unlock(&dmex);

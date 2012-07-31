@@ -93,17 +93,12 @@ static int plus3_getattr(const char *path, struct stat *st)
 	if(memcmp(dm+where, "PLUS3DOS\032", 9)==0)
 	{
 		uint32_t size=read32(dm+where+11);
-		//fprintf(stderr, "HEADER? %zu\n", (size_t)size);
 		uint8_t ck=0; // header checksum
 		for(size_t i=0;i<127;i++)
 			ck+=dm[where+i];
 		if(ck==(uint8_t)dm[where+127])
 			st->st_size=size-128; // first 128 bytes are the header itself
-		/*else
-			fprintf(stderr, "BADHEADER %hhu %hhu\n", ck, dm[where+127]);*/
 	}
-	/*else
-		fprintf(stderr, "NOHEADER\n");*/
 	st->st_nlink=1;
 	pthread_rwlock_unlock(&dmex);
 	return(0);
@@ -196,7 +191,7 @@ static int plus3_read(const char *path, char *buf, size_t size, off_t offset, st
 				where=d_offset+(((off_t)d_list[i].al[b])<<(7+d_bsh));
 			else
 			{
-				fprintf(stderr, "File covers more than one extent; can't handle this yet!\n");
+				fprintf(stderr, "plus3dosfs: File covers more than one extent; can't handle this yet!\n");
 				pthread_rwlock_unlock(&dmex);
 				return(-EIO);
 			}
@@ -376,14 +371,14 @@ int main(int argc, char *argv[])
 	}
 	if(pthread_rwlock_init(&dmex, NULL))
 	{
-		perror("pthread_rwlock_init");
+		perror("plus3dosfs: pthread_rwlock_init");
 		return(1);
 	}
 	const char *df=argv[1];
 	struct stat st;
 	if(stat(df, &st))
 	{
-		fprintf(stderr, "Failed to stat %s\n", df);
+		fprintf(stderr, "plus3dosfs: Failed to stat %s\n", df);
 		perror("\tstat");
 		pthread_rwlock_destroy(&dmex);
 		return(1);
@@ -392,16 +387,16 @@ int main(int argc, char *argv[])
 	ssize_t ptlen;
 	if((ptlen=getxattr(df, "user.idedos.pt", ptbuf, sizeof ptbuf))<0)
 	{
-		perror("getxattr");
+		perror("plus3dosfs: getxattr");
 		return(1);
 	}
 	if(strncmp(ptbuf, "3", ptlen))
 	{
-		fprintf(stderr, "%s is not a +3DOS partition\n\tuser.idedos.pt=%s\n", df, ptbuf);
+		fprintf(stderr, "plus3dosfs: %s is not a +3DOS partition\n\tuser.idedos.pt=%s\n", df, ptbuf);
 		return(1);
 	}
 	d_sz=st.st_size;
-	fprintf(stderr, "%s size is %jdB", df, (intmax_t)d_sz);
+	fprintf(stderr, "plus3dosfs: %s size is %jdB", df, (intmax_t)d_sz);
 	if(d_sz>2048)
 	{
 		const char *u="k";
@@ -422,7 +417,7 @@ int main(int argc, char *argv[])
 	int dfd=open(df, O_RDWR);
 	if(dfd<0)
 	{
-		perror("open");
+		perror("plus3dosfs: open");
 		pthread_rwlock_destroy(&dmex);
 		return(1);
 	}
@@ -430,36 +425,36 @@ int main(int argc, char *argv[])
 	{
 		if(errno==EWOULDBLOCK)
 		{
-			fprintf(stderr, "%s is locked by another process (flock: EWOULDBLOCK)\n", df);
+			fprintf(stderr, "plus3dosfs: %s is locked by another process (flock: EWOULDBLOCK)\n", df);
 		}
 		else
-			perror("flock");
+			perror("plus3dosfs: flock");
 		pthread_rwlock_destroy(&dmex);
 		return(1);
 	}
 	dm=mmap(NULL, d_sz, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_POPULATE, dfd, 0);
 	if(!dm)
 	{
-		perror("mmap");
+		perror("plus3dosfs: mmap");
 		flock(dfd, LOCK_UN);
 		close(dfd);
 		pthread_rwlock_destroy(&dmex);
 		return(1);
 	}
-	fprintf(stderr, "%s mmap()ed in\n", df);
+	fprintf(stderr, "plus3dosfs: %s mmap()ed in\n", df);
 	int rv=EXIT_FAILURE;
 	
 	char ndbuf[6];
 	ssize_t ndlen;
 	if((ndlen=getxattr(df, "user.plus3dos.xdpb.ndirent", ndbuf, sizeof ndbuf))<0)
 	{
-		perror("getxattr");
+		perror("plus3dosfs: getxattr");
 		goto shutdown;
 	}
 	ndbuf[ndlen]=0;
 	if(sscanf(ndbuf, "%u", &d_ndirent)!=1)
 	{
-		fprintf(stderr, "Bad user.plus3dos.xdpb.ndirent = %s\n", ndbuf);
+		fprintf(stderr, "plus3dosfs: Bad user.plus3dos.xdpb.ndirent = %s\n", ndbuf);
 		goto shutdown;
 	}
 	if(!(d_list=malloc(d_ndirent*sizeof(plus3_dirent))))
@@ -469,26 +464,26 @@ int main(int argc, char *argv[])
 	}
 	if((ndlen=getxattr(df, "user.plus3dos.xdpb.nblocks", ndbuf, sizeof ndbuf))<0)
 	{
-		perror("getxattr");
+		perror("plus3dosfs: getxattr");
 		goto shutdown;
 	}
 	ndbuf[ndlen]=0;
 	if(sscanf(ndbuf, "%u", &d_nblocks)!=1)
 	{
-		fprintf(stderr, "Bad user.plus3dos.xdpb.nblocks = %s\n", ndbuf);
+		fprintf(stderr, "plus3dosfs: Bad user.plus3dos.xdpb.nblocks = %s\n", ndbuf);
 		goto shutdown;
 	}
 	char bshbuf[6];
 	ssize_t bshlen;
 	if((bshlen=getxattr(df, "user.plus3dos.xdpb.bsh", bshbuf, sizeof bshbuf))<0)
 	{
-		perror("getxattr");
+		perror("plus3dosfs: getxattr");
 		goto shutdown;
 	}
 	bshbuf[bshlen]=0;
 	if(sscanf(bshbuf, "%hhu", &d_bsh)!=1)
 	{
-		fprintf(stderr, "Bad user.plus3dos.xdpb.bsh = %s\n", bshbuf);
+		fprintf(stderr, "plus3dosfs: Bad user.plus3dos.xdpb.bsh = %s\n", bshbuf);
 		goto shutdown;
 	}
 	d_manyblocks=(d_nblocks>255);
@@ -501,10 +496,11 @@ int main(int argc, char *argv[])
 		d_offset+=0x20;
 		if(d_offset+1>d_sz)
 		{
-			fprintf(stderr, "Failed to grovelise d_offset\n");
+			fprintf(stderr, "plus3dosfs: Failed to grovelise d_offset\n");
 			goto shutdown;
 		}
 	}
+	fprintf(stderr, "plus3dosfs: grovelled d_offset = %04x\n", (unsigned int)d_offset);
 	size_t uents=0;
 	for(size_t i=0;i<d_ndirent;i++)
 	{
@@ -514,7 +510,7 @@ int main(int argc, char *argv[])
 		if(d_list[i].status!=0xe5)
 			uents++;
 	}
-	fprintf(stderr, "Used %zu of %zu dirents\n", uents, d_ndirent);
+	fprintf(stderr, "plus3dosfs: Used %zu of %zu dirents\n", uents, d_ndirent);
 	
 	int fargc=argc-1;
 	char **fargv=(char **)malloc(fargc*sizeof(char *));
