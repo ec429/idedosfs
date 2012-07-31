@@ -137,14 +137,17 @@ static int plus3_getattr(const char *path, struct stat *st)
 	else
 	{
 		uint16_t extents=0;
-		while(d_list[i].rcount==0x80)
+		while((i>=0)&&((d_list[i].rcount&0x7f)==0))
 		{
 			extents++;
 			pthread_rwlock_unlock(&dmex);
 			i=lookup_extent(path, extents);
 			pthread_rwlock_rdlock(&dmex);
 		}
-		st->st_size=(extents<<14)+(d_list[i].rcount<<7)+d_list[i].bcount;
+		if(i<0)
+			st->st_size=extents<<14;
+		else
+			st->st_size=(extents<<14)+(d_list[i].rcount<<7)+d_list[i].bcount;
 	}
 	st->st_nlink=1;
 	pthread_rwlock_unlock(&dmex);
