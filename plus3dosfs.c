@@ -77,6 +77,7 @@ static int plus3_write(const char *path, const char *buf, size_t size, off_t off
 
 #define read16(p)	(((unsigned char *)p)[0]|(((unsigned char *)p)[1]<<8))
 #define read32(p)	(((unsigned char *)p)[0]|(((unsigned char *)p)[1]<<8)|(((unsigned char *)p)[2]<<16)|(((unsigned char *)p)[3]<<24))
+#define write16(p,v)	(((unsigned char *)p)[0]=((uint8_t)v)),(((unsigned char *)p)[1]=((uint8_t)v)>>8)
 #define write32(p,v)	(((unsigned char *)p)[0]=((uint8_t)v)),(((unsigned char *)p)[1]=((uint8_t)v)>>8),(((unsigned char *)p)[2]=((uint8_t)v)>>16),(((unsigned char *)p)[3]=((uint8_t)v)>>24)
 
 static int plus3_getattr(const char *path, struct stat *st)
@@ -363,6 +364,7 @@ static int plus3_write(const char *path, const char *buf, size_t size, off_t off
 				{
 					fprintf(stderr, "Extended file to length %zu\n", (size_t)(offset+size));
 					write32(dm+where+11, offset+size);
+					write16(dm+where+16, offset+size-128);
 				}
 				ck=0;
 				for(size_t i=0;i<127;i++)
@@ -419,8 +421,8 @@ static int plus3_write(const char *path, const char *buf, size_t size, off_t off
 			len=size-transferred;
 		if(i>=0)
 		{
-			d_list[i].rcount=(b%(d_manyblocks?8:16))<<d_bsh;
-			d_list[i].bcount=len&0x7f;
+			d_list[i].rcount=(1+(b%(d_manyblocks?8:16)))<<d_bsh;
+			d_list[i].bcount=0;
 			d_encode(dm+i*0x20, d_list[i]);
 		}
 		if((i>=0)&&where)
@@ -455,7 +457,10 @@ static int plus3_truncate(const char *path, off_t offset)
 		{
 			offset+=128;
 			if(offset<size)
+			{
 				write32(dm+where+11, offset);
+				write16(dm+where+16, offset-128);
+			}
 			ck=0;
 			for(size_t i=0;i<127;i++)
 				ck+=dm[where+i];
@@ -526,7 +531,7 @@ static int plus3_truncate(const char *path, off_t offset)
 	{
 		if(i>=0)
 		{
-			d_list[i].rcount=(1<<d_bsh);
+			d_list[i].rcount=(1+(b%(d_manyblocks?8:16)))<<d_bsh;
 			d_list[i].bcount=0;
 		}
 		if(b%(d_manyblocks?8:16))
@@ -545,8 +550,8 @@ static int plus3_truncate(const char *path, off_t offset)
 	{
 		if(i>=0)
 		{
-			d_list[i].rcount=((offset-1)>>7)%(1<<d_bsh);
-			d_list[i].bcount=(offset-1)&0x7F;
+			d_list[i].rcount=1+((offset-1)>>7)%(1<<d_bsh);
+			d_list[i].bcount=0;
 			for(unsigned int b=(blocknum+1)%(d_manyblocks?8:16);b<(d_manyblocks?8:16);b++)
 			{
 				if(d_list[i].al[b])
@@ -627,6 +632,119 @@ static int plus3_getxattr(const char *path, const char *name, char *value, size_
 		memcpy(value, result, rlen);
 	}
 	return(rlen);
+}
+
+static int plus3_setxattr(const char *path, const char *name, const char *value, size_t vlen, int flags)
+{
+	if(path[0]!='/') return(-ENOENT);
+	if(!path[1]) return(-ENOATTR);
+	int32_t i=lookup(path);
+	if((i<0)||(i>=(int32_t)d_ndirent))
+		return(-ENOENT);
+	pthread_rwlock_rdlock(&dmex);
+	// grovel for the header
+	off_t where=(((off_t)d_list[i].al[0])<<(7+d_bsh));
+	bool header=false;
+	size_t len=128*d_list[i].rcount+d_list[i].bcount;
+	if(memcmp(dm+where, "PLUS3DOS\032", 9)==0)
+	{
+		uint32_t size=read32(dm+where+11);
+		uint8_t ck=0; // header checksum
+		for(size_t i=0;i<127;i++)
+			ck+=dm[where+i];
+		if(ck==(uint8_t)dm[where+127])
+		{
+			header=true;
+			len=size;
+		}
+	}
+	pthread_rwlock_unlock(&dmex);
+	char ntval[vlen+1];
+	memcpy(ntval, value, vlen);
+	ntval[vlen]=0;
+	if(header&&(strcmp(name, "user.plus3dos.plus3basic.filetype")==0))
+	{
+		unsigned int ft;
+		if(sscanf(value, "%u", &ft)==1)
+		{
+			pthread_rwlock_wrlock(&dmex);
+			dm[where+15]=ft;
+			uint8_t ck=0; // header checksum
+			for(size_t i=0;i<127;i++)
+				ck+=dm[where+i];
+			dm[where+127]=ck;
+			pthread_rwlock_unlock(&dmex);
+			return(0);
+		}
+		return(-EINVAL);
+	}
+	else if(header&&(dm[where+15]==0)&&(strcmp(name, "user.plus3dos.plus3basic.line")==0))
+	{
+		unsigned int ln;
+		if(sscanf(value, "%u", &ln)==1)
+		{
+			pthread_rwlock_wrlock(&dmex);
+			dm[where+18]=ln;
+			dm[where+19]=ln>>8;
+			uint8_t ck=0; // header checksum
+			for(size_t i=0;i<127;i++)
+				ck+=dm[where+i];
+			dm[where+127]=ck;
+			pthread_rwlock_unlock(&dmex);
+			return(0);
+		}
+		return(-EINVAL);
+	}
+	else if(header&&(dm[where+15]==0)&&(strcmp(name, "user.plus3dos.plus3basic.prog")==0)) /* start of the variable area relative to the start of the program */
+	{
+		unsigned int pr;
+		if(sscanf(value, "%u", &pr)==1)
+		{
+			pthread_rwlock_wrlock(&dmex);
+			dm[where+20]=pr;
+			dm[where+21]=pr>>8;
+			uint8_t ck=0; // header checksum
+			for(size_t i=0;i<127;i++)
+				ck+=dm[where+i];
+			dm[where+127]=ck;
+			pthread_rwlock_unlock(&dmex);
+			return(0);
+		}
+		return(-EINVAL);
+	}
+	else if(header&&((dm[where+15]==1)||(dm[where+15]==2))&&(strcmp(name, "user.plus3dos.plus3basic.name")==0))
+	{
+		if(value[0])
+		{
+			pthread_rwlock_wrlock(&dmex);
+			dm[where+19]=value[0];
+			uint8_t ck=0; // header checksum
+			for(size_t i=0;i<127;i++)
+				ck+=dm[where+i];
+			dm[where+127]=ck;
+			pthread_rwlock_unlock(&dmex);
+			return(0);
+		}
+		return(-EINVAL);
+	}
+	else if(header&&(dm[where+15]==3)&&(strcmp(name, "user.plus3dos.plus3basic.addr")==0))
+	{
+		unsigned int ad;
+		if(sscanf(value, "%u", &ad)==1)
+		{
+			pthread_rwlock_wrlock(&dmex);
+			dm[where+18]=ad;
+			dm[where+19]=ad>>8;
+			uint8_t ck=0; // header checksum
+			for(size_t i=0;i<127;i++)
+				ck+=dm[where+i];
+			dm[where+127]=ck;
+			pthread_rwlock_unlock(&dmex);
+			return(0);
+		}
+		return(-EINVAL);
+	}
+	return(-ENOATTR);
 }
 
 static int plus3_listxattr(const char *path, char *list, size_t size)
@@ -718,7 +836,7 @@ static struct fuse_operations plus3_oper = {
 	/*.statfs		= plus3_statfs,
 	.release	= plus3_release,
 	.fsync		= plus3_fsync,*/
-	/*.setxattr	= plus3_setxattr,*/
+	.setxattr	= plus3_setxattr,
 	.getxattr	= plus3_getxattr,
 	.listxattr	= plus3_listxattr,
 	/*.removexattr= plus3_removexattr,*/

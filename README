@@ -8,6 +8,7 @@ To stop idedosfs just run "./stop"; this will unmount the sub/ mounts and then u
 Extended File Attributes:
 All the FSes use xattrs to communicate out-of-band data like file/partition types.
 To read these you will need getfattr(2) or the <attr/xattr.h> functions.  On Debian these are packaged in 'attr' and 'libattr1-dev'.
+To copy a file preserving its xattrs use "./cpx".  It's a wrapper for cp that passes --preserve=xattr.
 The xattrs are listed for each FS, below.
 =idedosfs=
 	user.idedos.pt	On partitions, gives the IDEDOS partition type (eg. "1" = IDEDOS System Partition, "3" = +3DOS)
