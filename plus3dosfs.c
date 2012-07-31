@@ -1073,11 +1073,8 @@ int main(int argc, char *argv[])
 		if(d_list[i].status!=0xe5)
 			uents++;
 		if(d_list[i].status<16)
-		{
-			fprintf(stderr, "%.8s.%.3s %04x\n", d_list[i].name, d_list[i].ext, (unsigned int)d_list[i].xnum);
 			for(unsigned int b=0;b<(d_manyblocks?8:16);b++)
 				if(d_list[i].al[b]) d_bitmap[d_list[i].al[b]]=true;
-		}
 	}
 	fprintf(stderr, "plus3dosfs: Used %zu of %zu dirents\n", uents, d_ndirent);
 	
