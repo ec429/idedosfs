@@ -63,6 +63,10 @@ static char bread_havelock(off_t offset); // only call if you already have the l
 static char bread(off_t offset);
 static void dread_havelock(char *buf, size_t bytes, off_t offset); // only call if you already have the lock!!!
 static void dread(char *buf, size_t bytes, off_t offset);
+static void bwrite_havelock(char byte, off_t offset); // only call if you already have the lock!!!
+static void bwrite(char byte, off_t offset);
+static void dwrite_havelock(const char *buf, size_t bytes, off_t offset); // only call if you already have the lock!!!
+static void dwrite(const char *buf, size_t bytes, off_t offset);
 
 static int lookup(const char *path);
 static bool islinked(unsigned int p);
@@ -204,6 +208,25 @@ static int ide_read(const char *path, char *buf, size_t size, off_t offset, stru
 	return(size);
 }
 
+static int ide_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
+{
+	int p=fi->fh;
+	if((p<0)||(p>=(int)d_np)) return(-EBADF);
+	pthread_rwlock_wrlock(&dmex);
+	uint32_t sch=p_list[p].sh+(p_list[p].sc*d_nh), ech=p_list[p].eh+(p_list[p].ec*d_nh); // start and end combined CH
+	uint16_t bps=(d_8bit||HSD)?256:512;
+	size_t len=(ech+1-sch)*d_st*bps;
+	if(size+offset>len) return(-ENOSPC);
+	dwrite_havelock(buf, size, sch*bps+offset);
+	pthread_rwlock_unlock(&dmex);
+	return(size);
+}
+
+static int ide_truncate(const char *path, off_t offset) 
+{
+	return(0); // do nothing, because you can't truncate partitions!
+}
+
 static int ide_getxattr(const char *path, const char *name, char *value, size_t vlen)
 {
 	int p=lookup(path);
@@ -310,13 +333,13 @@ static struct fuse_operations ide_oper = {
 	.rename		= ide_rename,
 	.link		= ide_link,
 	.chmod		= ide_chmod,
-	.chown		= ide_chown,
+	.chown		= ide_chown,*/
 	.truncate	= ide_truncate,
-	.utimens	= ide_utimens,*/
+	/*.utimens	= ide_utimens,*/
 	.open		= ide_open,
 	.read		= ide_read,
-	/*.write		= ide_write,
-	.statfs		= ide_statfs,
+	.write		= ide_write,
+	/*.statfs		= ide_statfs,
 	.release	= ide_release,
 	.fsync		= ide_fsync,*/
 	/*.setxattr	= ide_setxattr,*/
@@ -536,6 +559,40 @@ void dread(char *buf, size_t bytes, off_t offset)
 	if(!buf) return;
 	pthread_rwlock_rdlock(&dmex);
 	dread_havelock(buf, bytes, offset);
+	pthread_rwlock_unlock(&dmex);
+}
+
+static void bwrite_havelock(char byte, off_t offset)
+{
+	if(offset<d_sz)
+		dm[offset]=byte;
+}
+
+static void bwrite(char byte, off_t offset)
+{
+	pthread_rwlock_wrlock(&dmex);
+	bwrite_havelock(byte, offset);
+	pthread_rwlock_unlock(&dmex);
+}
+
+static void dwrite_havelock(const char *buf, size_t bytes, off_t offset)
+{
+	if(!buf) return;
+	if(d_8bit&&!HSD)
+		for(size_t i=0;i<bytes;i++)
+		{
+			bwrite_havelock(buf[i], HDDOFF+((offset+i)<<1));
+			bwrite_havelock(0, HDDOFF+((offset+i)<<1)+1);
+		}
+	else
+		memcpy(dm+HDDOFF+offset, buf, bytes);
+}
+
+static void dwrite(const char *buf, size_t bytes, off_t offset)
+{
+	if(!buf) return;
+	pthread_rwlock_wrlock(&dmex);
+	dwrite_havelock(buf, bytes, offset);
 	pthread_rwlock_unlock(&dmex);
 }
 
