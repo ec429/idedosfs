@@ -1,0 +1,6 @@
+#!/bin/bash
+
+for p in "$@"; do
+	touch "$p"
+	setfattr -n user.plus3dos.header -v 1 "$p"
+done

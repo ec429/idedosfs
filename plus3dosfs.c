@@ -123,7 +123,6 @@ static int plus3_getattr(const char *path, struct stat *st)
 		return(-ENOENT);
 	pthread_rwlock_rdlock(&dmex);
 	st->st_mode=S_IFREG | (d_list[i].ro?0500:0700);
-	st->st_size=(d_list[i].rcount<<7)+d_list[i].bcount;
 	// grovel for the header
 	off_t where=(((off_t)d_list[i].al[0])<<(7+d_bsh));
 	if(memcmp(dm+where, "PLUS3DOS\032", 9)==0)
@@ -135,8 +134,18 @@ static int plus3_getattr(const char *path, struct stat *st)
 		if(ck==(uint8_t)dm[where+127])
 			st->st_size=size-128; // first 128 bytes are the header itself
 	}
-	/*else
-		fprintf(stderr, "plus3dosfs: NOHEADER\n");*/
+	else
+	{
+		uint16_t extents=0;
+		while(d_list[i].rcount==0x80)
+		{
+			extents++;
+			pthread_rwlock_unlock(&dmex);
+			i=lookup_extent(path, extents);
+			pthread_rwlock_rdlock(&dmex);
+		}
+		st->st_size=(extents<<14)+(d_list[i].rcount<<7)+d_list[i].bcount;
+	}
 	st->st_nlink=1;
 	pthread_rwlock_unlock(&dmex);
 	return(0);
@@ -236,22 +245,6 @@ static int plus3_create(const char *path, mode_t mode, struct fuse_file_info *fi
 		if(i>=0)
 		{
 			fi->fh=i;
-			char hbuf[128];
-			memset(hbuf, 0, 128);
-			memcpy(hbuf, "PLUS3DOS\32\1\0\200\0\0\0\377", 16);
-			uint8_t ck=0; // header checksum
-			for(size_t i=0;i<127;i++)
-				ck+=hbuf[i];
-			hbuf[127]=ck;
-			pthread_rwlock_wrlock(&dmex);
-			if((d_list[i].al[0]=disk_alloc()))
-			{
-				d_list[i].rcount=1<<d_bsh;
-				off_t where=(((off_t)d_list[i].al[0])<<(7+d_bsh));
-				memcpy(dm+where, hbuf, 128);
-			}
-			d_encode(dm+i*0x20, d_list[i]);
-			pthread_rwlock_unlock(&dmex);
 			return(0);
 		}
 		return(-ENOSPC);
@@ -691,7 +684,7 @@ static int plus3_setxattr(const char *path, const char *name, const char *value,
 	// grovel for the header
 	off_t where=(((off_t)d_list[i].al[0])<<(7+d_bsh));
 	bool header=false;
-	size_t len=128*d_list[i].rcount+d_list[i].bcount;
+	bool empty=!(d_list[i].rcount||d_list[i].bcount);
 	if(memcmp(dm+where, "PLUS3DOS\032", 9)==0)
 	{
 		uint32_t size=read32(dm+where+11);
@@ -699,10 +692,7 @@ static int plus3_setxattr(const char *path, const char *name, const char *value,
 		for(size_t i=0;i<127;i++)
 			ck+=dm[where+i];
 		if(ck==(uint8_t)dm[where+127])
-		{
 			header=true;
-			len=size;
-		}
 	}
 	pthread_rwlock_unlock(&dmex);
 	char ntval[vlen+1];
@@ -801,8 +791,31 @@ static int plus3_setxattr(const char *path, const char *name, const char *value,
 			{
 				if(nh)
 				{
+					if(empty)
+					{
+						char hbuf[128];
+						memset(hbuf, 0, 128);
+						memcpy(hbuf, "PLUS3DOS\32\1\0\200\0\0\0\377", 16);
+						uint8_t ck=0; // header checksum
+						for(size_t i=0;i<127;i++)
+							ck+=hbuf[i];
+						hbuf[127]=ck;
+						if(!d_list[i].al[0]) d_list[i].al[0]=disk_alloc();
+						if(d_list[i].al[0])
+						{
+							off_t where=(((off_t)d_list[i].al[0])<<(7+d_bsh));
+							memcpy(dm+where, hbuf, 128);
+							d_list[i].rcount=0x10;
+							return(0);
+						}
+						else
+						{
+							pthread_rwlock_unlock(&dmex);
+							return(-ENOSPC);
+						}
+					}
 					pthread_rwlock_unlock(&dmex);
-					return(-ENOSYS);
+					return(-EFBIG);
 				}
 				else
 				{
